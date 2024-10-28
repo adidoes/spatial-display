@@ -1,4 +1,3 @@
-
 mod ar_drivers {
     pub mod lib;
 }
@@ -8,32 +7,50 @@ use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::diagnostic::LogDiagnosticsPlugin;
 use bevy::prelude::*;
 use bevy::render::{
-    mesh::Indices,
-    render_asset::RenderAssetUsages,
-    render_resource::PrimitiveTopology,
+    mesh::Indices, render_asset::RenderAssetUsages, render_resource::PrimitiveTopology,
 };
-use bevy::window::{PresentMode, Window, WindowPlugin, WindowMode};
+use bevy::window::{
+    Monitor, MonitorSelection, PresentMode, Window, WindowMode, WindowPlugin, WindowPosition,
+};
+
+use bevy::{
+    render::camera::RenderTarget,
+    window::{ExitCondition, WindowRef},
+};
+
+#[derive(Component)]
+struct MonitorRef(Entity);
 
 fn main() {
-
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 // https://docs.rs/bevy_window/latest/bevy_window/enum.PresentMode.html
                 present_mode: PresentMode::AutoNoVsync, // AutoVsync, AutoNoVsync
-                // when using AutoVsync, add the bevy_framepace plugin and uncomment 
+                // when using AutoVsync, add the bevy_framepace plugin and uncomment
                 // the framespace_settings lines in setup()
                 resizable: true,
-                mode: WindowMode::Windowed,
+                focused: false,
+                // mode: WindowMode::Fullscreen,
+                // mode: WindowMode::Windowed,
+                mode: WindowMode::Fullscreen(MonitorSelection::Index(1)),
+                position: WindowPosition::Centered(MonitorSelection::Index(1)), // 0 is primary, 1 is secondary
                 ..default()
             }),
             ..default()
         }))
+        // .add_plugins(DefaultPlugins.set(WindowPlugin {
+        //     primary_window: None,
+        //     exit_condition: ExitCondition::DontExit,
+        //     ..default()
+        // }))
         .insert_resource(SharedGlassesStore::new())
         // https://bevy-cheatbook.github.io/programming/schedules.html
         .add_systems(Startup, setup)
         .add_systems(Startup, create_glasses_thread)
         //  .add_systems(Update, input_handler)
+        .add_systems(Update, close_on_esc)
+        // .add_systems(Update, (update, close_on_esc))
         // You can do First/PreUpdate/Update or FixedFirst/FixedPreUpdate/FixedUpdate
         .add_systems(FixedPreUpdate, glasses_event_system)
         .insert_resource(Time::<Fixed>::from_hz(500.0)) // when using Fixed schedule
@@ -45,9 +62,93 @@ fn main() {
         .run();
 }
 
+fn close_on_esc(
+    mut commands: Commands,
+    focused_windows: Query<(Entity, &Window)>,
+    input: Res<ButtonInput<KeyCode>>,
+) {
+    for (window, focus) in focused_windows.iter() {
+        if !focus.focused {
+            continue;
+        }
+
+        if input.just_pressed(KeyCode::Escape) {
+            commands.entity(window).despawn();
+        }
+    }
+}
+
+fn update(
+    mut commands: Commands,
+    monitors_added: Query<(Entity, &Monitor), Added<Monitor>>,
+    mut monitors_removed: RemovedComponents<Monitor>,
+    monitor_refs: Query<(Entity, &MonitorRef)>,
+) {
+    for (entity, monitor) in monitors_added.iter() {
+        // Spawn a new window on each monitor
+        let name = monitor.name.clone().unwrap_or_else(|| "<no name>".into());
+        let size = format!("{}x{}px", monitor.physical_height, monitor.physical_width);
+        let hz = monitor
+            .refresh_rate_millihertz
+            .map(|x| format!("{}Hz", x as f32 / 1000.0))
+            .unwrap_or_else(|| "<unknown>".into());
+        let position = format!(
+            "x={} y={}",
+            monitor.physical_position.x, monitor.physical_position.y
+        );
+        let scale = format!("{:.2}", monitor.scale_factor);
+
+        let window = commands
+            .spawn((
+                Window {
+                    title: name.clone(),
+                    mode: WindowMode::Fullscreen(MonitorSelection::Entity(entity)),
+                    position: WindowPosition::Centered(MonitorSelection::Entity(entity)),
+                    ..default()
+                },
+                MonitorRef(entity),
+            ))
+            .id();
+
+        let camera = commands
+            .spawn((
+                Camera2d,
+                Camera {
+                    target: RenderTarget::Window(WindowRef::Entity(window)),
+                    ..default()
+                },
+            ))
+            .id();
+
+        let info_text = format!(
+            "Monitor: {name}\nSize: {size}\nRefresh rate: {hz}\nPosition: {position}\nScale: {scale}\n\n",
+        );
+        commands.spawn((
+            Text(info_text),
+            Node {
+                position_type: PositionType::Relative,
+                height: Val::Percent(100.0),
+                width: Val::Percent(100.0),
+                ..default()
+            },
+            TargetCamera(camera),
+            MonitorRef(entity),
+        ));
+    }
+
+    // Remove windows for removed monitors
+    for monitor_entity in monitors_removed.read() {
+        for (ref_entity, monitor_ref) in monitor_refs.iter() {
+            if monitor_ref.0 == monitor_entity {
+                commands.entity(ref_entity).despawn_recursive();
+            }
+        }
+    }
+}
+
 use dcmimu::DCMIMU;
-use std::sync::Mutex;
 use std::sync::Arc;
+use std::sync::Mutex;
 struct SharedGlassesStore {
     dcmimu: Arc<Mutex<DCMIMU>>,
 }
@@ -55,19 +156,17 @@ struct SharedGlassesStore {
 impl SharedGlassesStore {
     pub fn new() -> Self {
         Self {
-            dcmimu: Arc::new(Mutex::new(DCMIMU::new()))
+            dcmimu: Arc::new(Mutex::new(DCMIMU::new())),
         }
     }
 }
 
 impl Resource for SharedGlassesStore {}
 
-fn create_glasses_thread(shared_glasses_store: Res<SharedGlassesStore>, ) {
-
+fn create_glasses_thread(shared_glasses_store: Res<SharedGlassesStore>) {
     let shared_dcmimu_clone = Arc::clone(&shared_glasses_store.dcmimu);
 
     std::thread::spawn(move || {
-
         let mut glasses = any_glasses().unwrap();
         let mut last_timestamp: Option<u64> = None;
 
@@ -76,15 +175,13 @@ fn create_glasses_thread(shared_glasses_store: Res<SharedGlassesStore>, ) {
         let mut loop_counter = 0;
 
         loop {
-
             if let GlassesEvent::AccGyro {
                 accelerometer,
                 gyroscope,
-                timestamp
+                timestamp,
             } = glasses.read_event().unwrap()
             {
                 if let Some(last_timestamp) = last_timestamp {
-
                     let dt = (timestamp - last_timestamp) as f32 / 1_000_000.0; // in seconds
 
                     shared_dcmimu_clone.lock().unwrap().update(
@@ -105,9 +202,7 @@ fn create_glasses_thread(shared_glasses_store: Res<SharedGlassesStore>, ) {
                 loop_counter = 0;
                 last_print_time = Instant::now();
             }
-
         }
-
     });
 }
 
@@ -115,11 +210,10 @@ fn glasses_event_system(
     mut query: Query<&mut Transform, With<Camera>>,
     state: Res<SharedGlassesStore>,
 ) {
-
     let dcm = state.dcmimu.lock().unwrap().all();
 
     // println!("DCM: {:?}", dcm);
-    
+
     let rot = Transform::from_rotation(Quat::from_euler(
         EulerRot::YXZ,
         dcm.yaw,
@@ -142,7 +236,6 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     // mut framespace_settings: ResMut<bevy_framepace::FramepaceSettings>
 ) {
-
     // framespace_settings.limiter = bevy_framepace::Limiter::from_framerate(120.0);
 
     // Import the custom texture.
@@ -151,71 +244,60 @@ fn setup(
     let cube_mesh_handle: Handle<Mesh> = meshes.add(create_cube_mesh());
 
     let camera_vec = Vec3::new(0.0, 0.0, 0.0);
-    let plane_vec  = Vec3::new(0.0, -4.0, 0.0);
-    let cube_vec   = Vec3::new(0.0, 0.0, -10.0);
+    let plane_vec = Vec3::new(0.0, -4.0, 0.0);
+    let cube_vec = Vec3::new(0.0, 0.0, -10.0);
 
-    // Render the mesh with the custom texture using a PbrBundle, add the marker.
+    // Spawn the mesh with the custom texture using Mesh3d and MeshMaterial3d
     commands.spawn((
-        PbrBundle {
-            mesh: cube_mesh_handle,
-            material: materials.add(StandardMaterial {
-                base_color_texture: Some(custom_texture_handle),
-                ..default()
-            }),
-            transform: Transform::from_translation(cube_vec),
+        Mesh3d(cube_mesh_handle),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color_texture: Some(custom_texture_handle),
             ..default()
-        },
+        })),
+        Transform::from_translation(cube_vec),
         CustomUV,
     ));
 
     // Ground plane
-    commands.spawn(PbrBundle {
-        mesh: meshes.add(Plane3d::default().mesh().size(30.0, 30.0)),
-        material: materials.add(Color::WHITE),
-        transform: Transform::from_translation(plane_vec),
-        ..default()
-    });
+    commands.spawn((
+        Mesh3d(meshes.add(Plane3d::default().mesh().size(30.0, 30.0))),
+        MeshMaterial3d(materials.add(Color::WHITE)),
+        Transform::from_translation(plane_vec),
+    ));
 
     // Transform for the camera and lighting.
-    let camera_and_light_transform =
-        Transform::from_translation(camera_vec);//.looking_at(Vec3::ZERO, Vec3::Y);
+    let camera_and_light_transform = Transform::from_translation(camera_vec);
 
-    // Camera in 3D space.
-    commands.spawn(Camera3dBundle {
-        projection: PerspectiveProjection {
-            // We must specify the FOV in radians.
-            // Rust can convert degrees to radians for us.
-
-            // if objects move too much with the camera then fov is too big
+    // Camera in 3D space
+    commands.spawn((
+        Camera3d::default(),
+        Camera { ..default() },
+        Projection::from(PerspectiveProjection {
             fov: 21.70f32.to_radians(),
             ..default()
-        }.into(),
-        transform: camera_and_light_transform,
-        ..default()
-    });
+        }),
+        camera_and_light_transform,
+    ));
 
-    // Light up the scene.
-    commands.spawn(PointLightBundle {
-        transform: camera_and_light_transform,
-        ..default()
-    });
-
+    // Light
+    commands.spawn((PointLight::default(), camera_and_light_transform));
     // Text to describe the controls.
-    commands.spawn(
-        TextBundle::from_section(
-            "Controls:\nX/Y/Z: Rotate\nR: Reset orientation",
-            TextStyle {
-                font_size: 20.0,
-                ..default()
-            },
-        )
-        .with_style(Style {
+    commands.spawn((
+        Text::new("Controls:\nX/Y/Z: Rotate\nR: Reset orientation"),
+        TextFont {
+            font_size: 20.0,
+            ..default()
+        },
+        // Set the justification of the Text
+        TextLayout::new_with_justify(JustifyText::Center),
+        // Set the style of the Node itself.
+        Node {
             position_type: PositionType::Absolute,
             top: Val::Px(12.0),
             left: Val::Px(12.0),
             ..default()
-        }),
-    );
+        },
+    ));
 }
 
 // System to receive input from the user,
@@ -227,17 +309,17 @@ fn input_handler(
 ) {
     if keyboard_input.pressed(KeyCode::KeyX) {
         for mut transform in &mut query {
-            transform.rotate_x(time.delta_seconds() / 1.2);
+            transform.rotate_x(time.delta_secs() / 1.2);
         }
     }
     if keyboard_input.pressed(KeyCode::KeyY) {
         for mut transform in &mut query {
-            transform.rotate_y(time.delta_seconds() / 1.2);
+            transform.rotate_y(time.delta_secs() / 1.2);
         }
     }
     if keyboard_input.pressed(KeyCode::KeyZ) {
         for mut transform in &mut query {
-            transform.rotate_z(time.delta_seconds() / 1.2);
+            transform.rotate_z(time.delta_secs() / 1.2);
         }
     }
     if keyboard_input.pressed(KeyCode::KeyR) {
