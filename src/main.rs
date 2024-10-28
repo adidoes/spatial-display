@@ -10,7 +10,8 @@ use bevy::render::{
     mesh::Indices, render_asset::RenderAssetUsages, render_resource::PrimitiveTopology,
 };
 use bevy::window::{
-    Monitor, MonitorSelection, PresentMode, Window, WindowMode, WindowPlugin, WindowPosition,
+    Monitor, MonitorSelection, PresentMode, Window, WindowLevel, WindowMode, WindowPlugin,
+    WindowPosition,
 };
 
 use bevy::{
@@ -23,22 +24,27 @@ struct MonitorRef(Entity);
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                // https://docs.rs/bevy_window/latest/bevy_window/enum.PresentMode.html
-                present_mode: PresentMode::AutoNoVsync, // AutoVsync, AutoNoVsync
-                // when using AutoVsync, add the bevy_framepace plugin and uncomment
-                // the framespace_settings lines in setup()
-                resizable: true,
-                focused: false,
-                // mode: WindowMode::Fullscreen,
-                // mode: WindowMode::Windowed,
-                mode: WindowMode::Fullscreen(MonitorSelection::Index(1)),
-                position: WindowPosition::Centered(MonitorSelection::Index(1)), // 0 is primary, 1 is secondary
+        .add_plugins(
+            DefaultPlugins.set(WindowPlugin {
+                primary_window: Some(Window {
+                    // https://docs.rs/bevy_window/latest/bevy_window/enum.PresentMode.html
+                    present_mode: PresentMode::AutoNoVsync, // AutoVsync, AutoNoVsync
+                    // when using AutoVsync, add the bevy_framepace plugin and uncomment
+                    // the framespace_settings lines in setup()
+                    resizable: true,
+                    focused: false,
+                    visible: false,
+                    // mode: WindowMode::Fullscreen,
+                    // mode: WindowMode::Windowed,
+                    window_level: WindowLevel::AlwaysOnTop,
+                    mode: WindowMode::Fullscreen(MonitorSelection::Index(1)),
+                    position: WindowPosition::Centered(MonitorSelection::Index(1)), // 0 is primary, 1 is secondary
+                    ..default()
+                }),
                 ..default()
-            }),
-            ..default()
-        }))
+            }), // .build()
+                // .disable::<bevy::input::InputPlugin>(),
+        )
         // .add_plugins(DefaultPlugins.set(WindowPlugin {
         //     primary_window: None,
         //     exit_condition: ExitCondition::DontExit,
@@ -48,8 +54,7 @@ fn main() {
         // https://bevy-cheatbook.github.io/programming/schedules.html
         .add_systems(Startup, setup)
         .add_systems(Startup, create_glasses_thread)
-        //  .add_systems(Update, input_handler)
-        .add_systems(Update, close_on_esc)
+        // .add_systems(Update, handle_keyboard_input)
         // .add_systems(Update, (update, close_on_esc))
         // You can do First/PreUpdate/Update or FixedFirst/FixedPreUpdate/FixedUpdate
         .add_systems(FixedPreUpdate, glasses_event_system)
@@ -57,12 +62,12 @@ fn main() {
         .add_plugins((
             FrameTimeDiagnosticsPlugin,
             LogDiagnosticsPlugin::default(),
-            // bevy_framepace::FramepacePlugin // when disabling VSYNC also comment out this line
+            // bevy_framepace::FramepacePlugin, // when disabling VSYNC also comment out this line
         ))
         .run();
 }
 
-fn close_on_esc(
+fn handle_keyboard_input(
     mut commands: Commands,
     focused_windows: Query<(Entity, &Window)>,
     input: Res<ButtonInput<KeyCode>>,
@@ -283,7 +288,7 @@ fn setup(
     commands.spawn((PointLight::default(), camera_and_light_transform));
     // Text to describe the controls.
     commands.spawn((
-        Text::new("Controls:\nX/Y/Z: Rotate\nR: Reset orientation"),
+        Text::new("Spatial Display"),
         TextFont {
             font_size: 20.0,
             ..default()
@@ -298,36 +303,6 @@ fn setup(
             ..default()
         },
     ));
-}
-
-// System to receive input from the user,
-// check out examples/input/ for more examples about user input.
-fn input_handler(
-    keyboard_input: Res<ButtonInput<KeyCode>>,
-    mut query: Query<&mut Transform, With<CustomUV>>,
-    time: Res<Time>,
-) {
-    if keyboard_input.pressed(KeyCode::KeyX) {
-        for mut transform in &mut query {
-            transform.rotate_x(time.delta_secs() / 1.2);
-        }
-    }
-    if keyboard_input.pressed(KeyCode::KeyY) {
-        for mut transform in &mut query {
-            transform.rotate_y(time.delta_secs() / 1.2);
-        }
-    }
-    if keyboard_input.pressed(KeyCode::KeyZ) {
-        for mut transform in &mut query {
-            transform.rotate_z(time.delta_secs() / 1.2);
-        }
-    }
-    if keyboard_input.pressed(KeyCode::KeyR) {
-        for mut transform in &mut query {
-            println!("Resetting orientation");
-            transform.look_to(Vec3::NEG_Z, Vec3::Y);
-        }
-    }
 }
 
 #[rustfmt::skip]
