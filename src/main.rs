@@ -307,14 +307,14 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     // Create initial texture
-    let mut initial_texture = Image::new_fill(
+    let mut initial_texture = Image::new(
         Extent3d {
             width: 1920,
             height: 1080,
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        &[0, 0, 0, 255], // Initial black pixel
+        vec![0; 1920 * 1080 * 4],
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::RENDER_WORLD,
     );
@@ -322,13 +322,9 @@ fn setup(
     initial_texture.texture_descriptor.usage =
         TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING;
 
-    println!(
-        "Created texture: {}x{}",
-        initial_texture.width(),
-        initial_texture.height()
-    );
-
     let texture_handle = images.add(initial_texture);
+
+    // Store the handle as a strong handle
     commands.insert_resource(ScreenTexture {
         handle: texture_handle.clone(),
     });
@@ -431,12 +427,18 @@ fn update_texture(
     screen_texture: Res<ScreenTexture>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    println!("Update texture system running");
     let mut shared = frame_data.shared_data.lock().unwrap();
     if shared.new_frame {
-        println!("New frame received");
+        println!("Texture handle: {:?}", screen_texture.handle);
         if let Some(texture) = images.get_mut(&screen_texture.handle) {
             if texture.width() != shared.width || texture.height() != shared.height {
+                println!(
+                    "Texture size mismatch: {}x{} vs {}x{}",
+                    texture.width(),
+                    texture.height(),
+                    shared.width,
+                    shared.height
+                );
                 *texture = Image::new(
                     Extent3d {
                         width: shared.width,
@@ -451,9 +453,12 @@ fn update_texture(
                 texture.texture_descriptor.usage =
                     TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING;
             } else {
+                // println!("Updating texture with new frame");
                 texture.data.clear();
                 texture.data.extend_from_slice(&shared.buffer);
             }
+        } else {
+            println!("Texture not found for handle: {:?}", screen_texture.handle);
         }
         shared.new_frame = false;
     }
@@ -551,7 +556,7 @@ declare_class!(
                             shared.height = height;
                             shared.buffer = rgba;
                             shared.new_frame = true;
-                            println!("New frame captured: {}x{}", width, height);
+                            // println!("New frame captured: {}x{}", width, height);
                         } else {
                             println!("❌ Failed to lock shared data");
                         }
