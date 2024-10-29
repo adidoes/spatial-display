@@ -121,7 +121,7 @@ fn main() {
         // https://bevy-cheatbook.github.io/programming/schedules.html
         .add_systems(Startup, setup)
         .add_systems(Startup, create_glasses_thread)
-        .add_systems(Update, update_texture)
+        .add_systems(FixedUpdate, update_texture)
         // .add_systems(Update, handle_keyboard_input)
         // .add_systems(Update, (update, close_on_esc))
         // You can do First/PreUpdate/Update or FixedFirst/FixedPreUpdate/FixedUpdate
@@ -309,8 +309,8 @@ fn setup(
     // Create initial texture
     let mut initial_texture = Image::new_fill(
         Extent3d {
-            width: 1920,  // Set to your capture resolution
-            height: 1080, // Set to your capture resolution
+            width: 1920,
+            height: 1080,
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
@@ -319,11 +319,15 @@ fn setup(
         RenderAssetUsages::RENDER_WORLD,
     );
 
-    // Important: Set the texture as filterable in sampler
     initial_texture.texture_descriptor.usage =
         TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING;
 
-    // Store the texture handle
+    println!(
+        "Created texture: {}x{}",
+        initial_texture.width(),
+        initial_texture.height()
+    );
+
     let texture_handle = images.add(initial_texture);
     commands.insert_resource(ScreenTexture {
         handle: texture_handle.clone(),
@@ -360,6 +364,7 @@ fn setup(
     mesh.insert_indices(Indices::U32(vec![0, 2, 1, 0, 3, 2]));
 
     let quad_handle = meshes.add(mesh);
+    println!("Created quad with scale: {:?}", Vec3::new(16.0, 9.0, 1.0));
 
     // Create material with the screen texture
     let screen_material = materials.add(StandardMaterial {
@@ -370,19 +375,13 @@ fn setup(
     });
 
     // Spawn the screen quad
-    // commands.spawn((MaterialMeshBundle {
-    //     mesh: quad_handle,
-    //     material: screen_material,
-    //     transform: Transform::from_translation(screen_vec).with_scale(Vec3::new(16.0, 9.0, 1.0)), // Adjust scale to match aspect ratio
-    //     ..default()
-    // },));
     commands.spawn((
-        Mesh3d(quad_handle.clone()),
+        Mesh3d(quad_handle),
         MeshMaterial3d(screen_material),
         Transform::from_translation(screen_vec).with_scale(Vec3::new(16.0, 9.0, 1.0)),
     ));
 
-    // Ground plane (optional - you can remove if not needed)
+    // Ground plane
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::default().mesh().size(30.0, 30.0))),
         MeshMaterial3d(materials.add(Color::WHITE)),
@@ -397,13 +396,20 @@ fn setup(
             fov: 21.70f32.to_radians(),
             ..default()
         }),
-        Transform::from_translation(camera_vec),
+        Transform::from_translation(camera_vec), //.looking_at(screen_vec, Vec3::Y),
     ));
 
-    // Light (optional - since we're using unlit material)
-    commands.spawn(PointLight::default());
+    // Light
+    commands.spawn((
+        PointLight {
+            intensity: 1500.0,
+            shadows_enabled: true,
+            ..default()
+        },
+        Transform::from_xyz(4.0, 8.0, 4.0),
+    ));
 
-    // Text overlay
+    // Text overlay (optional)
     commands.spawn((
         Text::new("Spatial Display"),
         TextFont {
@@ -428,6 +434,7 @@ fn update_texture(
     println!("Update texture system running");
     let mut shared = frame_data.shared_data.lock().unwrap();
     if shared.new_frame {
+        println!("New frame received");
         if let Some(texture) = images.get_mut(&screen_texture.handle) {
             if texture.width() != shared.width || texture.height() != shared.height {
                 *texture = Image::new(
