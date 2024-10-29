@@ -478,19 +478,14 @@ declare_class!(
                 return;
             }
 
-            println!("📸 Received new sample buffer");
+            // println!("📸 Received new sample buffer");
 
             let sample_buffer = unsafe { CMSampleBuffer::wrap_under_get_rule(sample_buffer) };
             if let Some(image_buffer) = sample_buffer.get_image_buffer() {
                 if let Some(pixel_buffer) = image_buffer.downcast::<CVPixelBuffer>() {
-                    println!("📊 Got pixel buffer: {}x{}",
-                        pixel_buffer.get_width(), pixel_buffer.get_height());
-                    println!("   Pixel format: {:?}", pixel_buffer.get_pixel_format());
-
-                    // Add this check
-                    if pixel_buffer.get_pixel_format() != kCVPixelFormatType_32BGRA {
-                        println!("⚠️ Unexpected pixel format - expected BGRA");
-                    }
+                    // println!("📊 Got pixel buffer: {}x{}",
+                    //     pixel_buffer.get_width(), pixel_buffer.get_height());
+                    // println!("   Pixel format: {:?}", pixel_buffer.get_pixel_format());
 
                     pixel_buffer.lock_base_address(kCVPixelBufferLock_ReadOnly);
                     let data = unsafe { pixel_buffer.get_base_address() };
@@ -504,39 +499,40 @@ declare_class!(
                     let height = pixel_buffer.get_height() as u32;
                     let bytes_per_row = pixel_buffer.get_bytes_per_row() as usize;
 
-                    println!("📏 Buffer details:");
-                    println!("   Width: {}, Height: {}", width, height);
-                    println!("   Expected buffer size: {}", width * height * 4);
-                    println!("   Bytes per row: {}", bytes_per_row);
+                    // println!("📏 Buffer details:");
+                    // println!("   Width: {}, Height: {}", width, height);
+                    // println!("   Expected buffer size: {}", width * height * 4);
+                    // println!("   Bytes per row: {}", bytes_per_row);
 
                     // Create RGBA buffer with pre-allocated capacity
                     let mut rgba = Vec::with_capacity((width * height * 4) as usize);
 
-                    // Safe buffer copying
-                    for y in 0..height {
-                        for x in 0..width {
-                            let offset = (y as usize * bytes_per_row) + (x as usize * 4);
-                            unsafe {
-                                let ptr = data.add(offset);
-                                // Verify we're not exceeding buffer bounds
-                                if offset + 4 <= bytes_per_row * height as usize {
-                                    let slice = std::slice::from_raw_parts(ptr as *const u8, 4);
-                                    rgba.extend_from_slice(slice);
-                                }
+                    // Safe buffer copying with proper stride handling
+                    unsafe {
+                        for y in 0..height as usize {
+                            let row_ptr = data.add(y * bytes_per_row) as *const u8;
+                            let row_slice = std::slice::from_raw_parts(row_ptr, width as usize * 4);
+
+                            // Convert BGRA to RGBA if needed
+                            for pixel in row_slice.chunks_exact(4) {
+                                // BGRA to RGBA conversion
+                                rgba.push(pixel[2]); // R (from B)
+                                rgba.push(pixel[1]); // G (stays same)
+                                rgba.push(pixel[0]); // B (from R)
+                                rgba.push(pixel[3]); // A (stays same)
                             }
                         }
                     }
 
-                    println!("📊 Buffer creation results:");
-                    println!("   Actual buffer size: {}", rgba.len());
-                    println!("   Expected size: {}", (width * height * 4) as usize);
-                    println!("   Match?: {}", rgba.len() == (width * height * 4) as usize);
+                    // println!("📊 Buffer creation results:");
+                    // println!("   Actual buffer size: {}", rgba.len());
+                    // println!("   Expected size: {}", (width * height * 4) as usize);
+                    // println!("   Match?: {}", rgba.len() == (width * height * 4) as usize);
 
                     // Update shared data only if we successfully created the buffer
                     if rgba.len() == (width * height * 4) as usize {
                         if let Ok(mut shared) = self.ivars().shared_data.lock() {
-                            println!("💾 Updated shared buffer with {}x{} frame",
-                                width, height);  // Changed from shared.width to width
+                            // println!("💾 Updated shared buffer with {}x{} frame", width, height);
                             shared.width = width;
                             shared.height = height;
                             shared.buffer = rgba;
@@ -549,7 +545,6 @@ declare_class!(
                         println!("   Got: {}, Expected: {}", rgba.len(), (width * height * 4) as usize);
                     }
 
-                    // Always unlock the buffer
                     pixel_buffer.unlock_base_address(kCVPixelBufferLock_ReadOnly);
                 } else {
                     println!("❌ Failed to get CVPixelBuffer");
