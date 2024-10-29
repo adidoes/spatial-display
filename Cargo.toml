@@ -42,6 +42,7 @@ objc2-foundation = { version = "0.2.2", features = [
   "NSString",
 ] }
 dispatch2 = "0.1.0"
+core-foundation = { version = "0.10.0", default-features = false }
 
 [dev-dependencies]
 clap = { version = "4.3", features = ["derive"] }

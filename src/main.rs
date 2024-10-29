@@ -22,6 +22,7 @@ use bevy::{
 #[derive(Component)]
 struct MonitorRef(Entity);
 
+use core_foundation::base::TCFType;
 use core_media::sample_buffer::{CMSampleBuffer, CMSampleBufferRef};
 use core_video::pixel_buffer::CVPixelBuffer;
 use core_video::pixel_buffer::CVPixelBufferLockFlags;
@@ -44,6 +45,7 @@ use screen_capture_kit::{
     shareable_content::SCShareableContent,
     stream::{SCFrameStatus, SCStream, SCStreamConfiguration},
 };
+
 use std::sync::{Arc, Mutex};
 
 // Shared state between capture thread and bevy
@@ -410,17 +412,17 @@ declare_class!(
                 return;
             }
 
-            // let sample_buffer = unsafe { CMSampleBuffer::wrap_under_get_rule(sample_buffer) };
-            let sample_buffer = CMSampleBuffer::wrap_under_get_rule(sample_buffer);
+            let sample_buffer = unsafe { CMSampleBuffer::wrap_under_get_rule(sample_buffer) };
+            // let sample_buffer = CMSampleBuffer::wrap_under_get_rule(sample_buffer);
             if let Some(image_buffer) = sample_buffer.get_image_buffer() {
                 if let Some(pixel_buffer) = image_buffer.downcast::<CVPixelBuffer>() {
                     // Lock the buffer for reading
-                    pixel_buffer.lock_base_address(CVPixelBufferLockFlags::READ_ONLY);
+                    // pixel_buffer.lock_base_address(CVPixelBufferLockFlags::READONLY);
 
-                    let width = pixel_buffer.width() as u32;
-                    let height = pixel_buffer.height() as u32;
-                    let bytes_per_row = pixel_buffer.bytes_per_row();
-                    let data = pixel_buffer.base_address().unwrap();
+                    let width = pixel_buffer.get_width() as u32;
+                    let height = pixel_buffer.get_height() as u32;
+                    let bytes_per_row = pixel_buffer.get_bytes_per_row() as usize;
+                    let data = unsafe { pixel_buffer.get_base_address() };
 
                     // Create RGBA buffer
                     let mut rgba = Vec::with_capacity((width * height * 4) as usize);
@@ -428,7 +430,7 @@ declare_class!(
                         for x in 0..width {
                             let offset = (y as usize * bytes_per_row) + (x as usize * 4);
                             unsafe {
-                                let ptr = data.add(offset);
+                                let ptr = data.add(offset) as *const u8;
                                 rgba.extend_from_slice(std::slice::from_raw_parts(ptr, 4));
                             }
                         }
@@ -443,7 +445,7 @@ declare_class!(
                     }
 
                     // Unlock the buffer
-                    pixel_buffer.unlock_base_address();
+                    // pixel_buffer.unlock_base_address();
                 }
             }
         }
@@ -457,9 +459,9 @@ declare_class!(
     }
 
     unsafe impl Delegate {
-        #[method_id(init)]
-        fn init(this: Allocated<Self>) -> Option<Id<Self>> {
-            let this = this.set_ivars(DelegateIvars {});
+        #[method_id(new)]
+        fn new_internal(this: Allocated<Self>, shared_data: Arc<Mutex<SharedFrameData>>) -> Option<Id<Self>> {
+            let this = this.set_ivars(DelegateIvars { shared_data });
             unsafe { msg_send_id![super(this), init] }
         }
     }
@@ -467,14 +469,10 @@ declare_class!(
 
 extern_methods!(
     unsafe impl Delegate {
+        #[method_id(new)]
         pub fn new(shared_data: Arc<Mutex<SharedFrameData>>) -> Id<Self> {
             let alloc: Allocated<Self> = Self::alloc();
-            unsafe {
-                alloc
-                    .set_ivars(DelegateIvars { shared_data })
-                    .init()
-                    .unwrap()
-            }
+            Self::new_internal(alloc, shared_data).unwrap()
         }
     }
 );
@@ -492,7 +490,14 @@ fn capture_screen(shared_data: Arc<Mutex<SharedFrameData>>) {
 
         // Wait for and unwrap the ShareableContent result
         let shareable_content = rx.recv().unwrap().unwrap();
-        let display = shareable_content.displays().first().unwrap();
+        let displays = shareable_content.displays();
+        let display = match displays.first() {
+            Some(display) => display,
+            None => {
+                println!("no display found");
+                return;
+            }
+        };
 
         // Create content filter
         let filter = SCContentFilter::init_with_display_exclude_windows(

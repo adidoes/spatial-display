@@ -5233,6 +5233,7 @@ dependencies = [
  "bytemuck",
  "byteorder",
  "clap",
+ "core-foundation 0.10.0",
  "core-graphics2",
  "core-media",
  "core-video",
