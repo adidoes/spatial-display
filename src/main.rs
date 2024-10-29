@@ -28,6 +28,7 @@ use bevy::render::render_resource::{TextureFormat, TextureUsages};
 use core_foundation::base::TCFType;
 use core_media::sample_buffer::{CMSampleBuffer, CMSampleBufferRef};
 use core_video::pixel_buffer::kCVPixelBufferLock_ReadOnly;
+use core_video::pixel_buffer::kCVPixelFormatType_32BGRA;
 use core_video::pixel_buffer::CVPixelBuffer;
 use core_video::pixel_buffer::CVPixelBufferLockFlags;
 use dispatch2::{Queue, QueueAttribute};
@@ -341,7 +342,7 @@ fn setup(
     // Create material with the screen texture
     let screen_material = materials.add(StandardMaterial {
         base_color_texture: Some(texture_handle),
-        unlit: true, // Make the material unlit so it's not affected by lighting
+        // unlit: true, // Make the material unlit so it's not affected by lighting
         alpha_mode: AlphaMode::Blend,
         ..default()
     });
@@ -404,9 +405,22 @@ fn update_texture(
 ) {
     let mut shared = frame_data.shared_data.lock().unwrap();
     if shared.new_frame {
+        println!(
+            "📥 Received new frame: {}x{} with buffer size: {}",
+            shared.width,
+            shared.height,
+            shared.buffer.len()
+        );
+
         if let Some(texture) = images.get_mut(&screen_texture.handle) {
-            // Check if we need to resize the texture
             if texture.width() != shared.width || texture.height() != shared.height {
+                println!(
+                    "🔄 Resizing texture from {}x{} to {}x{}",
+                    texture.width(),
+                    texture.height(),
+                    shared.width,
+                    shared.height
+                );
                 *texture = Image::new(
                     Extent3d {
                         width: shared.width,
@@ -422,7 +436,10 @@ fn update_texture(
                     TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING;
             } else {
                 texture.data = shared.buffer.clone();
+                println!("✅ Updated texture data");
             }
+        } else {
+            println!("❌ Failed to get texture from handle");
         }
         shared.new_frame = false;
     }
@@ -461,51 +478,84 @@ declare_class!(
                 return;
             }
 
+            println!("📸 Received new sample buffer");
+
             let sample_buffer = unsafe { CMSampleBuffer::wrap_under_get_rule(sample_buffer) };
             if let Some(image_buffer) = sample_buffer.get_image_buffer() {
                 if let Some(pixel_buffer) = image_buffer.downcast::<CVPixelBuffer>() {
-                    // Lock the buffer before accessing
+                    println!("📊 Got pixel buffer: {}x{}",
+                        pixel_buffer.get_width(), pixel_buffer.get_height());
+                    println!("   Pixel format: {:?}", pixel_buffer.get_pixel_format());
+
+                    // Add this check
+                    if pixel_buffer.get_pixel_format() != kCVPixelFormatType_32BGRA {
+                        println!("⚠️ Unexpected pixel format - expected BGRA");
+                    }
+
                     pixel_buffer.lock_base_address(kCVPixelBufferLock_ReadOnly);
+                    let data = unsafe { pixel_buffer.get_base_address() };
+
+                    if data.is_null() {
+                        println!("❌ Pixel buffer base address is null");
+                        return;
+                    }
 
                     let width = pixel_buffer.get_width() as u32;
                     let height = pixel_buffer.get_height() as u32;
                     let bytes_per_row = pixel_buffer.get_bytes_per_row() as usize;
-                    let data = unsafe { pixel_buffer.get_base_address() };
 
-                    // Safety check for null pointer
-                    if !data.is_null() {
-                        // Create RGBA buffer with pre-allocated capacity
-                        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+                    println!("📏 Buffer details:");
+                    println!("   Width: {}, Height: {}", width, height);
+                    println!("   Expected buffer size: {}", width * height * 4);
+                    println!("   Bytes per row: {}", bytes_per_row);
 
-                        // Safe buffer copying
-                        for y in 0..height {
-                            for x in 0..width {
-                                let offset = (y as usize * bytes_per_row) + (x as usize * 4);
-                                unsafe {
-                                    let ptr = data.add(offset);
-                                    // Verify we're not exceeding buffer bounds
-                                    if offset + 4 <= bytes_per_row * height as usize {
-                                        let slice = std::slice::from_raw_parts(ptr as *const u8, 4);
-                                        rgba.extend_from_slice(slice);
-                                    }
+                    // Create RGBA buffer with pre-allocated capacity
+                    let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+
+                    // Safe buffer copying
+                    for y in 0..height {
+                        for x in 0..width {
+                            let offset = (y as usize * bytes_per_row) + (x as usize * 4);
+                            unsafe {
+                                let ptr = data.add(offset);
+                                // Verify we're not exceeding buffer bounds
+                                if offset + 4 <= bytes_per_row * height as usize {
+                                    let slice = std::slice::from_raw_parts(ptr as *const u8, 4);
+                                    rgba.extend_from_slice(slice);
                                 }
-                            }
-                        }
-
-                        // Update shared data only if we successfully created the buffer
-                        if rgba.len() == (width * height * 4) as usize {
-                            if let Ok(mut shared) = self.ivars().shared_data.lock() {
-                                shared.width = width;
-                                shared.height = height;
-                                shared.buffer = rgba;
-                                shared.new_frame = true;
                             }
                         }
                     }
 
+                    println!("📊 Buffer creation results:");
+                    println!("   Actual buffer size: {}", rgba.len());
+                    println!("   Expected size: {}", (width * height * 4) as usize);
+                    println!("   Match?: {}", rgba.len() == (width * height * 4) as usize);
+
+                    // Update shared data only if we successfully created the buffer
+                    if rgba.len() == (width * height * 4) as usize {
+                        if let Ok(mut shared) = self.ivars().shared_data.lock() {
+                            println!("💾 Updated shared buffer with {}x{} frame",
+                                width, height);  // Changed from shared.width to width
+                            shared.width = width;
+                            shared.height = height;
+                            shared.buffer = rgba;
+                            shared.new_frame = true;
+                        } else {
+                            println!("❌ Failed to lock shared data");
+                        }
+                    } else {
+                        println!("❌ Buffer size mismatch - skipping frame");
+                        println!("   Got: {}, Expected: {}", rgba.len(), (width * height * 4) as usize);
+                    }
+
                     // Always unlock the buffer
                     pixel_buffer.unlock_base_address(kCVPixelBufferLock_ReadOnly);
+                } else {
+                    println!("❌ Failed to get CVPixelBuffer");
                 }
+            } else {
+                println!("❌ Failed to get image buffer");
             }
         }
     }
@@ -529,6 +579,8 @@ impl Delegate {
 }
 
 fn capture_screen(shared_data: Arc<Mutex<SharedFrameData>>) {
+    println!("🎥 Starting screen capture");
+
     tokio::runtime::Runtime::new().unwrap().block_on(async {
         // Create channel for ShareableContent result
         let (tx, rx) = std::sync::mpsc::channel();
@@ -542,10 +594,16 @@ fn capture_screen(shared_data: Arc<Mutex<SharedFrameData>>) {
         // Wait for and unwrap the ShareableContent result
         let shareable_content = rx.recv().unwrap().unwrap();
         let displays = shareable_content.displays();
+
+        println!("🖥️ Found {} displays", displays.len());
+
         let display = match displays.first() {
-            Some(display) => display,
+            Some(display) => {
+                println!("📺 Using display: {}x{}", display.width(), display.height());
+                display
+            }
             None => {
-                println!("no display found");
+                println!("❌ No display found");
                 return;
             }
         };
@@ -580,12 +638,12 @@ fn capture_screen(shared_data: Arc<Mutex<SharedFrameData>>) {
             .expect("Failed to add stream output");
 
         // Start capture
-        stream.start_capture(|result| {
-            if let Some(error) = result {
-                eprintln!("Capture error: {:?}", error);
-            }
+        stream.start_capture(|result| match result {
+            None => println!("✅ Capture started successfully"),
+            Some(error) => println!("❌ Capture error: {:?}", error),
         });
 
+        println!("🔄 Entering capture loop");
         // Keep alive
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
