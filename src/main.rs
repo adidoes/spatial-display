@@ -457,25 +457,17 @@ declare_class!(
             println!("error: {:?}", error);
         }
     }
+);
 
-    unsafe impl Delegate {
-        #[method_id(new)]
-        fn new_internal(this: Allocated<Self>, shared_data: Arc<Mutex<SharedFrameData>>) -> Option<Id<Self>> {
+impl Delegate {
+    pub fn new(shared_data: Arc<Mutex<SharedFrameData>>) -> Id<Self> {
+        let this: Allocated<Self> = Self::alloc();
+        unsafe {
             let this = this.set_ivars(DelegateIvars { shared_data });
-            unsafe { msg_send_id![super(this), init] }
+            msg_send_id![super(this), init]
         }
     }
-);
-
-extern_methods!(
-    unsafe impl Delegate {
-        #[method_id(new)]
-        pub fn new(shared_data: Arc<Mutex<SharedFrameData>>) -> Id<Self> {
-            let alloc: Allocated<Self> = Self::alloc();
-            Self::new_internal(alloc, shared_data).unwrap()
-        }
-    }
-);
+}
 
 fn capture_screen(shared_data: Arc<Mutex<SharedFrameData>>) {
     tokio::runtime::Runtime::new().unwrap().block_on(async {
