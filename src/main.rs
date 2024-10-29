@@ -22,7 +22,66 @@ use bevy::{
 #[derive(Component)]
 struct MonitorRef(Entity);
 
+use core_media::sample_buffer::{CMSampleBuffer, CMSampleBufferRef};
+use core_video::pixel_buffer::CVPixelBuffer;
+use core_video::pixel_buffer::CVPixelBufferLockFlags;
+use dispatch2::{Queue, QueueAttribute};
+use objc2::{
+    declare_class, extern_methods, msg_send_id, mutability,
+    rc::{Allocated, Id},
+    runtime::ProtocolObject,
+    ClassType, DeclaredClass,
+};
+use objc2_foundation::NSArray;
+use objc2_foundation::NSError;
+use objc2_foundation::NSObject;
+use objc2_foundation::NSObjectProtocol;
+use screen_capture_kit::stream::SCContentFilter;
+use screen_capture_kit::stream::SCStreamDelegate;
+use screen_capture_kit::stream::SCStreamOutput;
+use screen_capture_kit::stream::SCStreamOutputType;
+use screen_capture_kit::{
+    shareable_content::SCShareableContent,
+    stream::{SCFrameStatus, SCStream, SCStreamConfiguration},
+};
+use std::sync::{Arc, Mutex};
+
+// Shared state between capture thread and bevy
+#[derive(Debug)]
+struct SharedFrameData {
+    width: u32,
+    height: u32,
+    buffer: Vec<u8>,
+    new_frame: bool,
+}
+
+// Resource to hold the texture handle
+#[derive(Resource)]
+struct ScreenTexture {
+    handle: Handle<Image>,
+}
+
+// Resource to hold shared frame data
+#[derive(Resource)]
+struct FrameDataResource {
+    shared_data: Arc<Mutex<SharedFrameData>>,
+}
+
 fn main() {
+    // Initialize shared frame data
+    let shared_data = Arc::new(Mutex::new(SharedFrameData {
+        width: 0,
+        height: 0,
+        buffer: Vec::new(),
+        new_frame: false,
+    }));
+
+    // Spawn capture thread
+    let capture_data = shared_data.clone();
+    std::thread::spawn(move || {
+        capture_screen(capture_data);
+    });
+
     App::new()
         .add_plugins(
             DefaultPlugins.set(WindowPlugin {
@@ -50,6 +109,7 @@ fn main() {
         //     exit_condition: ExitCondition::DontExit,
         //     ..default()
         // }))
+        .insert_resource(FrameDataResource { shared_data })
         .insert_resource(SharedGlassesStore::new())
         // https://bevy-cheatbook.github.io/programming/schedules.html
         .add_systems(Startup, setup)
@@ -152,8 +212,6 @@ fn update(
 }
 
 use dcmimu::DCMIMU;
-use std::sync::Arc;
-use std::sync::Mutex;
 struct SharedGlassesStore {
     dcmimu: Arc<Mutex<DCMIMU>>,
 }
@@ -303,6 +361,180 @@ fn setup(
             ..default()
         },
     ));
+}
+
+fn update_texture(
+    frame_data: Res<FrameDataResource>,
+    screen_texture: Res<ScreenTexture>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    let mut shared = frame_data.shared_data.lock().unwrap();
+    if shared.new_frame {
+        if let Some(texture) = images.get_mut(&screen_texture.handle) {
+            texture.data = shared.buffer.clone();
+        }
+        shared.new_frame = false;
+    }
+}
+
+// Define the ivars struct first
+#[derive(Debug)]
+pub struct DelegateIvars {
+    shared_data: Arc<Mutex<SharedFrameData>>,
+}
+
+declare_class!(
+    struct Delegate;
+
+    unsafe impl ClassType for Delegate {
+        type Super = NSObject;
+        type Mutability = mutability::Mutable;
+        const NAME: &'static str = "StreamOutputSampleBufferDelegate";
+    }
+
+    impl DeclaredClass for Delegate {
+        type Ivars = DelegateIvars;
+    }
+
+    unsafe impl NSObjectProtocol for Delegate {}
+
+    unsafe impl SCStreamOutput for Delegate {
+        #[method(stream:didOutputSampleBuffer:ofType:)]
+        fn stream_did_output_sample_buffer(
+            &self,
+            _stream: &SCStream,
+            sample_buffer: CMSampleBufferRef,
+            of_type: SCStreamOutputType,
+        ) {
+            if of_type != SCStreamOutputType::Screen {
+                return;
+            }
+
+            // let sample_buffer = unsafe { CMSampleBuffer::wrap_under_get_rule(sample_buffer) };
+            let sample_buffer = CMSampleBuffer::wrap_under_get_rule(sample_buffer);
+            if let Some(image_buffer) = sample_buffer.get_image_buffer() {
+                if let Some(pixel_buffer) = image_buffer.downcast::<CVPixelBuffer>() {
+                    // Lock the buffer for reading
+                    pixel_buffer.lock_base_address(CVPixelBufferLockFlags::READ_ONLY);
+
+                    let width = pixel_buffer.width() as u32;
+                    let height = pixel_buffer.height() as u32;
+                    let bytes_per_row = pixel_buffer.bytes_per_row();
+                    let data = pixel_buffer.base_address().unwrap();
+
+                    // Create RGBA buffer
+                    let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+                    for y in 0..height {
+                        for x in 0..width {
+                            let offset = (y as usize * bytes_per_row) + (x as usize * 4);
+                            unsafe {
+                                let ptr = data.add(offset);
+                                rgba.extend_from_slice(std::slice::from_raw_parts(ptr, 4));
+                            }
+                        }
+                    }
+
+                    // Update shared data
+                    if let Ok(mut shared) = self.ivars().shared_data.lock() {
+                        shared.width = width;
+                        shared.height = height;
+                        shared.buffer = rgba;
+                        shared.new_frame = true;
+                    }
+
+                    // Unlock the buffer
+                    pixel_buffer.unlock_base_address();
+                }
+            }
+        }
+    }
+
+    unsafe impl SCStreamDelegate for Delegate {
+        #[method(stream:didStopWithError:)]
+        unsafe fn stream_did_stop_with_error(&self, _stream: &SCStream, error: &NSError) {
+            println!("error: {:?}", error);
+        }
+    }
+
+    unsafe impl Delegate {
+        #[method_id(init)]
+        fn init(this: Allocated<Self>) -> Option<Id<Self>> {
+            let this = this.set_ivars(DelegateIvars {});
+            unsafe { msg_send_id![super(this), init] }
+        }
+    }
+);
+
+extern_methods!(
+    unsafe impl Delegate {
+        pub fn new(shared_data: Arc<Mutex<SharedFrameData>>) -> Id<Self> {
+            let alloc: Allocated<Self> = Self::alloc();
+            unsafe {
+                alloc
+                    .set_ivars(DelegateIvars { shared_data })
+                    .init()
+                    .unwrap()
+            }
+        }
+    }
+);
+
+fn capture_screen(shared_data: Arc<Mutex<SharedFrameData>>) {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        // Create channel for ShareableContent result
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        // Get displays using completion handler
+        SCShareableContent::get_shareable_content_with_completion_closure(move |content, error| {
+            let result = content.ok_or_else(|| error.unwrap());
+            tx.send(result).unwrap();
+        });
+
+        // Wait for and unwrap the ShareableContent result
+        let shareable_content = rx.recv().unwrap().unwrap();
+        let display = shareable_content.displays().first().unwrap();
+
+        // Create content filter
+        let filter = SCContentFilter::init_with_display_exclude_windows(
+            SCContentFilter::alloc(),
+            display,
+            &NSArray::new(),
+        );
+
+        // Configure stream
+        let config = SCStreamConfiguration::new();
+        config.set_width(display.width() as usize);
+        config.set_height(display.height() as usize);
+
+        // Create delegate with shared data
+        // let delegate = Delegate {
+        //     shared_data: shared_data.clone(),
+        // };
+        let delegate = Delegate::new(shared_data.clone());
+        let stream_error = ProtocolObject::from_ref(&*delegate);
+
+        // Create stream with filter and configuration
+        let stream = SCStream::init_with_filter(SCStream::alloc(), &filter, &config, stream_error);
+
+        // Set up queue and add stream output
+        let queue = Queue::new("com.screen_capture.queue", QueueAttribute::Serial);
+        let output = ProtocolObject::from_ref(&*delegate);
+        stream
+            .add_stream_output(output, SCStreamOutputType::Screen, &queue)
+            .expect("Failed to add stream output");
+
+        // Start capture
+        stream.start_capture(|result| {
+            if let Some(error) = result {
+                eprintln!("Capture error: {:?}", error);
+            }
+        });
+
+        // Keep alive
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        }
+    });
 }
 
 #[rustfmt::skip]

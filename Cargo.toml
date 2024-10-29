@@ -14,15 +14,34 @@ hidapi = { version = "2.6.3" }
 tinyjson = { version = "2.5.1" }
 bytemuck = { version = "1.13.1" }
 byteorder = "1.4"
-nalgebra = { version = "0.32.3", default-features=false, features = ["std"]}
+nalgebra = { version = "0.32.3", default-features = false, features = ["std"] }
 
 dcmimu = "0.2.2"
 
 async-hid = "0.1.0"
 
-screencapturekit = "0.2.8"
 winit = "0.30.5"
 tray-item = "0.10.0"
+screen-capture-kit = "0.3.1"
+tokio = { version = "1.41.0", features = ["full"] }
+core-graphics2 = { version = "0.4.1", default-features = false, features = [
+  "display",
+  "objc",
+  "window",
+] }
+core-media = { version = "0.5.1", default-features = false, features = [
+  "objc",
+] }
+core-video = { version = "0.4.3", features = ["objc"] }
+objc2 = "0.5.2"
+objc2-foundation = { version = "0.2.2", features = [
+  "NSArray",
+  "NSDictionary",
+  "NSError",
+  "NSGeometry",
+  "NSString",
+] }
+dispatch2 = "0.1.0"
 
 [dev-dependencies]
 clap = { version = "4.3", features = ["derive"] }
