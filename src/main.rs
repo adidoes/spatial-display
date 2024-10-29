@@ -305,10 +305,7 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    // mut framespace_settings: ResMut<bevy_framepace::FramepaceSettings>
 ) {
-    // framespace_settings.limiter = bevy_framepace::Limiter::from_framerate(120.0);
-
     // Create initial texture
     let mut initial_texture = Image::new_fill(
         Extent3d {
@@ -336,14 +333,39 @@ fn setup(
     let plane_vec = Vec3::new(0.0, -4.0, 0.0);
     let screen_vec = Vec3::new(0.0, 0.0, -10.0);
 
-    // Create a quad mesh for the screen
-    let quad_handle = meshes.add(Mesh::from(Plane3d::new(Vec3::Z, Vec2::splat(0.5))));
+    // Create a custom plane mesh with correct UV coordinates
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_POSITION,
+        vec![
+            [-0.5, -0.5, 0.0], // bottom left
+            [0.5, -0.5, 0.0],  // bottom right
+            [0.5, 0.5, 0.0],   // top right
+            [-0.5, 0.5, 0.0],  // top left
+        ],
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_UV_0,
+        vec![
+            [0.0, 1.0], // bottom left
+            [1.0, 1.0], // bottom right
+            [1.0, 0.0], // top right
+            [0.0, 0.0], // top left
+        ],
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; 4]);
+    mesh.insert_indices(Indices::U32(vec![0, 2, 1, 0, 3, 2]));
+
+    let quad_handle = meshes.add(mesh);
 
     // Create material with the screen texture
     let screen_material = materials.add(StandardMaterial {
         base_color_texture: Some(texture_handle),
-        // unlit: true, // Make the material unlit so it's not affected by lighting
-        alpha_mode: AlphaMode::Blend,
+        unlit: true,                   // Make sure lighting doesn't affect the texture
+        alpha_mode: AlphaMode::Opaque, // Change from Blend to Opaque
         ..default()
     });
 
@@ -403,24 +425,11 @@ fn update_texture(
     screen_texture: Res<ScreenTexture>,
     mut images: ResMut<Assets<Image>>,
 ) {
+    println!("Update texture system running");
     let mut shared = frame_data.shared_data.lock().unwrap();
     if shared.new_frame {
-        println!(
-            "📥 Received new frame: {}x{} with buffer size: {}",
-            shared.width,
-            shared.height,
-            shared.buffer.len()
-        );
-
         if let Some(texture) = images.get_mut(&screen_texture.handle) {
             if texture.width() != shared.width || texture.height() != shared.height {
-                println!(
-                    "🔄 Resizing texture from {}x{} to {}x{}",
-                    texture.width(),
-                    texture.height(),
-                    shared.width,
-                    shared.height
-                );
                 *texture = Image::new(
                     Extent3d {
                         width: shared.width,
@@ -435,11 +444,9 @@ fn update_texture(
                 texture.texture_descriptor.usage =
                     TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING;
             } else {
-                texture.data = shared.buffer.clone();
-                println!("✅ Updated texture data");
+                texture.data.clear();
+                texture.data.extend_from_slice(&shared.buffer);
             }
-        } else {
-            println!("❌ Failed to get texture from handle");
         }
         shared.new_frame = false;
     }
@@ -537,6 +544,7 @@ declare_class!(
                             shared.height = height;
                             shared.buffer = rgba;
                             shared.new_frame = true;
+                            println!("New frame captured: {}x{}", width, height);
                         } else {
                             println!("❌ Failed to lock shared data");
                         }
