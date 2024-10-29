@@ -6,6 +6,8 @@ use ar_drivers::lib::{any_glasses, GlassesEvent};
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::diagnostic::LogDiagnosticsPlugin;
 use bevy::prelude::*;
+use bevy::render::render_resource::Extent3d;
+use bevy::render::render_resource::TextureDimension;
 use bevy::render::{
     mesh::Indices, render_asset::RenderAssetUsages, render_resource::PrimitiveTopology,
 };
@@ -22,8 +24,10 @@ use bevy::{
 #[derive(Component)]
 struct MonitorRef(Entity);
 
+use bevy::render::render_resource::{TextureFormat, TextureUsages};
 use core_foundation::base::TCFType;
 use core_media::sample_buffer::{CMSampleBuffer, CMSampleBufferRef};
+use core_video::pixel_buffer::kCVPixelBufferLock_ReadOnly;
 use core_video::pixel_buffer::CVPixelBuffer;
 use core_video::pixel_buffer::CVPixelBufferLockFlags;
 use dispatch2::{Queue, QueueAttribute};
@@ -116,6 +120,7 @@ fn main() {
         // https://bevy-cheatbook.github.io/programming/schedules.html
         .add_systems(Startup, setup)
         .add_systems(Startup, create_glasses_thread)
+        .add_systems(Update, update_texture)
         // .add_systems(Update, handle_keyboard_input)
         // .add_systems(Update, (update, close_on_esc))
         // You can do First/PreUpdate/Update or FixedFirst/FixedPreUpdate/FixedUpdate
@@ -296,42 +301,70 @@ struct CustomUV;
 
 fn setup(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
+    mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
     // mut framespace_settings: ResMut<bevy_framepace::FramepaceSettings>
 ) {
     // framespace_settings.limiter = bevy_framepace::Limiter::from_framerate(120.0);
 
-    // Import the custom texture.
-    let custom_texture_handle: Handle<Image> = asset_server.load("array_texture.png");
-    // Create and save a handle to the mesh.
-    let cube_mesh_handle: Handle<Mesh> = meshes.add(create_cube_mesh());
+    // Create initial texture
+    let mut initial_texture = Image::new_fill(
+        Extent3d {
+            width: 1920,  // Set to your capture resolution
+            height: 1080, // Set to your capture resolution
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        &[0, 0, 0, 255], // Initial black pixel
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+
+    // Important: Set the texture as filterable in sampler
+    initial_texture.texture_descriptor.usage =
+        TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING;
+
+    // Store the texture handle
+    let texture_handle = images.add(initial_texture);
+    commands.insert_resource(ScreenTexture {
+        handle: texture_handle.clone(),
+    });
 
     let camera_vec = Vec3::new(0.0, 0.0, 0.0);
     let plane_vec = Vec3::new(0.0, -4.0, 0.0);
-    let cube_vec = Vec3::new(0.0, 0.0, -10.0);
+    let screen_vec = Vec3::new(0.0, 0.0, -10.0);
 
-    // Spawn the mesh with the custom texture using Mesh3d and MeshMaterial3d
+    // Create a quad mesh for the screen
+    let quad_handle = meshes.add(Mesh::from(Plane3d::new(Vec3::Z, Vec2::splat(0.5))));
+
+    // Create material with the screen texture
+    let screen_material = materials.add(StandardMaterial {
+        base_color_texture: Some(texture_handle),
+        unlit: true, // Make the material unlit so it's not affected by lighting
+        alpha_mode: AlphaMode::Blend,
+        ..default()
+    });
+
+    // Spawn the screen quad
+    // commands.spawn((MaterialMeshBundle {
+    //     mesh: quad_handle,
+    //     material: screen_material,
+    //     transform: Transform::from_translation(screen_vec).with_scale(Vec3::new(16.0, 9.0, 1.0)), // Adjust scale to match aspect ratio
+    //     ..default()
+    // },));
     commands.spawn((
-        Mesh3d(cube_mesh_handle),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color_texture: Some(custom_texture_handle),
-            ..default()
-        })),
-        Transform::from_translation(cube_vec),
-        CustomUV,
+        Mesh3d(quad_handle.clone()),
+        MeshMaterial3d(screen_material),
+        Transform::from_translation(screen_vec).with_scale(Vec3::new(16.0, 9.0, 1.0)),
     ));
 
-    // Ground plane
+    // Ground plane (optional - you can remove if not needed)
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::default().mesh().size(30.0, 30.0))),
         MeshMaterial3d(materials.add(Color::WHITE)),
         Transform::from_translation(plane_vec),
     ));
-
-    // Transform for the camera and lighting.
-    let camera_and_light_transform = Transform::from_translation(camera_vec);
 
     // Camera in 3D space
     commands.spawn((
@@ -341,21 +374,20 @@ fn setup(
             fov: 21.70f32.to_radians(),
             ..default()
         }),
-        camera_and_light_transform,
+        Transform::from_translation(camera_vec),
     ));
 
-    // Light
-    commands.spawn((PointLight::default(), camera_and_light_transform));
-    // Text to describe the controls.
+    // Light (optional - since we're using unlit material)
+    commands.spawn(PointLight::default());
+
+    // Text overlay
     commands.spawn((
         Text::new("Spatial Display"),
         TextFont {
             font_size: 20.0,
             ..default()
         },
-        // Set the justification of the Text
         TextLayout::new_with_justify(JustifyText::Center),
-        // Set the style of the Node itself.
         Node {
             position_type: PositionType::Absolute,
             top: Val::Px(12.0),
@@ -373,7 +405,24 @@ fn update_texture(
     let mut shared = frame_data.shared_data.lock().unwrap();
     if shared.new_frame {
         if let Some(texture) = images.get_mut(&screen_texture.handle) {
-            texture.data = shared.buffer.clone();
+            // Check if we need to resize the texture
+            if texture.width() != shared.width || texture.height() != shared.height {
+                *texture = Image::new(
+                    Extent3d {
+                        width: shared.width,
+                        height: shared.height,
+                        depth_or_array_layers: 1,
+                    },
+                    TextureDimension::D2,
+                    shared.buffer.clone(),
+                    TextureFormat::Rgba8UnormSrgb,
+                    RenderAssetUsages::RENDER_WORLD,
+                );
+                texture.texture_descriptor.usage =
+                    TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING;
+            } else {
+                texture.data = shared.buffer.clone();
+            }
         }
         shared.new_frame = false;
     }
@@ -413,39 +462,49 @@ declare_class!(
             }
 
             let sample_buffer = unsafe { CMSampleBuffer::wrap_under_get_rule(sample_buffer) };
-            // let sample_buffer = CMSampleBuffer::wrap_under_get_rule(sample_buffer);
             if let Some(image_buffer) = sample_buffer.get_image_buffer() {
                 if let Some(pixel_buffer) = image_buffer.downcast::<CVPixelBuffer>() {
-                    // Lock the buffer for reading
-                    // pixel_buffer.lock_base_address(CVPixelBufferLockFlags::READONLY);
+                    // Lock the buffer before accessing
+                    pixel_buffer.lock_base_address(kCVPixelBufferLock_ReadOnly);
 
                     let width = pixel_buffer.get_width() as u32;
                     let height = pixel_buffer.get_height() as u32;
                     let bytes_per_row = pixel_buffer.get_bytes_per_row() as usize;
                     let data = unsafe { pixel_buffer.get_base_address() };
 
-                    // Create RGBA buffer
-                    let mut rgba = Vec::with_capacity((width * height * 4) as usize);
-                    for y in 0..height {
-                        for x in 0..width {
-                            let offset = (y as usize * bytes_per_row) + (x as usize * 4);
-                            unsafe {
-                                let ptr = data.add(offset) as *const u8;
-                                rgba.extend_from_slice(std::slice::from_raw_parts(ptr, 4));
+                    // Safety check for null pointer
+                    if !data.is_null() {
+                        // Create RGBA buffer with pre-allocated capacity
+                        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+
+                        // Safe buffer copying
+                        for y in 0..height {
+                            for x in 0..width {
+                                let offset = (y as usize * bytes_per_row) + (x as usize * 4);
+                                unsafe {
+                                    let ptr = data.add(offset);
+                                    // Verify we're not exceeding buffer bounds
+                                    if offset + 4 <= bytes_per_row * height as usize {
+                                        let slice = std::slice::from_raw_parts(ptr as *const u8, 4);
+                                        rgba.extend_from_slice(slice);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Update shared data only if we successfully created the buffer
+                        if rgba.len() == (width * height * 4) as usize {
+                            if let Ok(mut shared) = self.ivars().shared_data.lock() {
+                                shared.width = width;
+                                shared.height = height;
+                                shared.buffer = rgba;
+                                shared.new_frame = true;
                             }
                         }
                     }
 
-                    // Update shared data
-                    if let Ok(mut shared) = self.ivars().shared_data.lock() {
-                        shared.width = width;
-                        shared.height = height;
-                        shared.buffer = rgba;
-                        shared.new_frame = true;
-                    }
-
-                    // Unlock the buffer
-                    // pixel_buffer.unlock_base_address();
+                    // Always unlock the buffer
+                    pixel_buffer.unlock_base_address(kCVPixelBufferLock_ReadOnly);
                 }
             }
         }
