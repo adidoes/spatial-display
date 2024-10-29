@@ -21,9 +21,6 @@ use bevy::{
     window::{ExitCondition, WindowRef},
 };
 
-#[derive(Component)]
-struct MonitorRef(Entity);
-
 use bevy::render::render_resource::{TextureFormat, TextureUsages};
 use core_foundation::base::TCFType;
 use core_media::sample_buffer::{CMSampleBuffer, CMSampleBufferRef};
@@ -52,6 +49,9 @@ use screen_capture_kit::{
 };
 
 use std::sync::{Arc, Mutex};
+
+#[derive(Component)]
+struct MonitorRef(Entity);
 
 // Shared state between capture thread and bevy
 #[derive(Debug)]
@@ -141,11 +141,11 @@ fn handle_keyboard_input(
     input: Res<ButtonInput<KeyCode>>,
 ) {
     for (window, focus) in focused_windows.iter() {
-        if !focus.focused {
+        if (!focus.focused) {
             continue;
         }
 
-        if input.just_pressed(KeyCode::Escape) {
+        if (input.just_pressed(KeyCode::Escape)) {
             commands.entity(window).despawn();
         }
     }
@@ -212,7 +212,7 @@ fn update(
     // Remove windows for removed monitors
     for monitor_entity in monitors_removed.read() {
         for (ref_entity, monitor_ref) in monitor_refs.iter() {
-            if monitor_ref.0 == monitor_entity {
+            if (monitor_ref.0 == monitor_entity) {
                 commands.entity(ref_entity).despawn_recursive();
             }
         }
@@ -268,7 +268,7 @@ fn create_glasses_thread(shared_glasses_store: Res<SharedGlassesStore>) {
 
             loop_counter += 1;
 
-            if last_print_time.elapsed() > Duration::from_secs(1) {
+            if (last_print_time.elapsed() > Duration::from_secs(1)) {
                 println!("Loop has run {} times in the last second", loop_counter);
                 loop_counter = 0;
                 last_print_time = Instant::now();
@@ -297,70 +297,33 @@ fn glasses_event_system(
     }
 }
 
-#[derive(Component)]
-struct CustomUV;
-
 fn setup(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
-    // Create initial texture
-    let mut initial_texture = Image::new(
+    // Create initial texture with RGBA format
+    let mut screen_texture = Image::new(
         Extent3d {
-            width: 1920,
-            height: 1080,
+            width: 1800,
+            height: 1169,
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        vec![0; 1920 * 1080 * 4],
+        vec![0; 1800 * 1169 * 4],
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::RENDER_WORLD,
     );
 
-    initial_texture.texture_descriptor.usage =
+    screen_texture.texture_descriptor.usage =
         TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING;
 
-    let texture_handle = images.add(initial_texture);
-
-    // Store the handle as a strong handle
+    let texture_handle = images.add(screen_texture);
     commands.insert_resource(ScreenTexture {
         handle: texture_handle.clone(),
     });
-
-    let camera_vec = Vec3::new(0.0, 0.0, 0.0);
-    let plane_vec = Vec3::new(0.0, -4.0, 0.0);
-    let screen_vec = Vec3::new(0.0, 0.0, -10.0);
-
-    // Create a custom plane mesh with correct UV coordinates
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    mesh.insert_attribute(
-        Mesh::ATTRIBUTE_POSITION,
-        vec![
-            [-0.5, -0.5, 0.0], // bottom left
-            [0.5, -0.5, 0.0],  // bottom right
-            [0.5, 0.5, 0.0],   // top right
-            [-0.5, 0.5, 0.0],  // top left
-        ],
-    );
-    mesh.insert_attribute(
-        Mesh::ATTRIBUTE_UV_0,
-        vec![
-            [0.0, 1.0], // bottom left
-            [1.0, 1.0], // bottom right
-            [1.0, 0.0], // top right
-            [0.0, 0.0], // top left
-        ],
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; 4]);
-    mesh.insert_indices(Indices::U32(vec![0, 2, 1, 0, 3, 2]));
-
-    let quad_handle = meshes.add(mesh);
-    println!("Created quad with scale: {:?}", Vec3::new(16.0, 9.0, 1.0));
+    println!("Texture handle: {:?}", texture_handle);
 
     // Create material with the screen texture
     let screen_material = materials.add(StandardMaterial {
@@ -370,29 +333,53 @@ fn setup(
         ..default()
     });
 
-    // Spawn the screen quad
     commands.spawn((
-        Mesh3d(quad_handle),
+        Mesh3d(meshes.add(Mesh::from(Plane3d::new(Vec3::Z, Vec2::splat(5.0))))),
         MeshMaterial3d(screen_material),
-        Transform::from_translation(screen_vec).with_scale(Vec3::new(16.0, 9.0, 1.0)),
+        Transform::from_xyz(0.0, 0.0, -10.0),
+        // Transform::from_xyz(0.0, 0.0, -10.0)
+        //     .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)), // Rotate 90 degrees around X axis
     ));
 
     // Ground plane
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::default().mesh().size(30.0, 30.0))),
-        MeshMaterial3d(materials.add(Color::WHITE)),
-        Transform::from_translation(plane_vec),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::WHITE,
+            ..default()
+        })),
+        Transform::from_xyz(0.0, -4.0, 0.0),
     ));
 
-    // Camera in 3D space
+    // Test cube
+    commands.spawn((
+        Mesh3d(meshes.add(create_cube_mesh())),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::linear_rgb(34.0, 43.0, 87.0),
+            ..default()
+        })),
+        Transform::from_xyz(2.0, 0.0, -5.0),
+    ));
+
+    // Test spheres in different positions
+    commands.spawn((
+        Mesh3d(meshes.add(Sphere::default().mesh())),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::linear_rgb(255.0, 200.0, 0.0),
+            ..default()
+        })),
+        Transform::from_xyz(-2.0, 1.0, -7.0),
+    ));
+
+    // Camera
     commands.spawn((
         Camera3d::default(),
-        Camera { ..default() },
-        Projection::from(PerspectiveProjection {
+        Camera::default(),
+        Projection::Perspective(PerspectiveProjection {
             fov: 21.70f32.to_radians(),
             ..default()
         }),
-        Transform::from_translation(camera_vec), //.looking_at(screen_vec, Vec3::Y),
+        Transform::from_xyz(0.0, 0.0, 0.0),
     ));
 
     // Light
@@ -404,22 +391,43 @@ fn setup(
         },
         Transform::from_xyz(4.0, 8.0, 4.0),
     ));
+}
 
-    // Text overlay (optional)
-    commands.spawn((
-        Text::new("Spatial Display"),
-        TextFont {
-            font_size: 20.0,
-            ..default()
-        },
-        TextLayout::new_with_justify(JustifyText::Center),
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(12.0),
-            left: Val::Px(12.0),
-            ..default()
-        },
-    ));
+fn create_screen_plane() -> Mesh {
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+
+    // Vertices of a square plane
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_POSITION,
+        vec![
+            [-0.5, -0.5, 0.0], // bottom left
+            [0.5, -0.5, 0.0],  // bottom right
+            [0.5, 0.5, 0.0],   // top right
+            [-0.5, 0.5, 0.0],  // top left
+        ],
+    );
+
+    // UV coordinates for proper texture mapping
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_UV_0,
+        vec![
+            [0.0, 1.0], // bottom left
+            [1.0, 1.0], // bottom right
+            [1.0, 0.0], // top right
+            [0.0, 0.0], // top left
+        ],
+    );
+
+    // Normal vectors for lighting
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; 4]);
+
+    // Triangle indices
+    mesh.insert_indices(Indices::U32(vec![0, 2, 1, 0, 3, 2]));
+
+    mesh
 }
 
 fn update_texture(
@@ -428,40 +436,35 @@ fn update_texture(
     mut images: ResMut<Assets<Image>>,
 ) {
     let mut shared = frame_data.shared_data.lock().unwrap();
-    if shared.new_frame {
-        println!("Texture handle: {:?}", screen_texture.handle);
-        if let Some(texture) = images.get_mut(&screen_texture.handle) {
-            if texture.width() != shared.width || texture.height() != shared.height {
-                println!(
-                    "Texture size mismatch: {}x{} vs {}x{}",
-                    texture.width(),
-                    texture.height(),
-                    shared.width,
-                    shared.height
-                );
-                *texture = Image::new(
-                    Extent3d {
-                        width: shared.width,
-                        height: shared.height,
-                        depth_or_array_layers: 1,
-                    },
-                    TextureDimension::D2,
-                    shared.buffer.clone(),
-                    TextureFormat::Rgba8UnormSrgb,
-                    RenderAssetUsages::RENDER_WORLD,
-                );
-                texture.texture_descriptor.usage =
-                    TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING;
-            } else {
-                // println!("Updating texture with new frame");
-                texture.data.clear();
-                texture.data.extend_from_slice(&shared.buffer);
-            }
-        } else {
-            println!("Texture not found for handle: {:?}", screen_texture.handle);
-        }
-        shared.new_frame = false;
+
+    if (!shared.new_frame) {
+        return;
     }
+
+    if let Some(texture) = images.get_mut(&screen_texture.handle) {
+        // Check if texture dimensions need updating
+        if (texture.width() != shared.width || texture.height() != shared.height) {
+            *texture = Image::new(
+                Extent3d {
+                    width: shared.width,
+                    height: shared.height,
+                    depth_or_array_layers: 1,
+                },
+                TextureDimension::D2,
+                shared.buffer.clone(),
+                TextureFormat::Rgba8UnormSrgb,
+                RenderAssetUsages::RENDER_WORLD,
+            );
+            texture.texture_descriptor.usage =
+                TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING;
+        } else {
+            // Update existing texture data
+            texture.data.clear();
+            texture.data.extend_from_slice(&shared.buffer);
+        }
+    }
+
+    shared.new_frame = false;
 }
 
 // Define the ivars struct first
@@ -493,7 +496,7 @@ declare_class!(
             sample_buffer: CMSampleBufferRef,
             of_type: SCStreamOutputType,
         ) {
-            if of_type != SCStreamOutputType::Screen {
+            if (of_type != SCStreamOutputType::Screen) {
                 return;
             }
 
@@ -509,7 +512,7 @@ declare_class!(
                     pixel_buffer.lock_base_address(kCVPixelBufferLock_ReadOnly);
                     let data = unsafe { pixel_buffer.get_base_address() };
 
-                    if data.is_null() {
+                    if (data.is_null()) {
                         println!("❌ Pixel buffer base address is null");
                         return;
                     }
@@ -549,7 +552,7 @@ declare_class!(
                     // println!("   Match?: {}", rgba.len() == (width * height * 4) as usize);
 
                     // Update shared data only if we successfully created the buffer
-                    if rgba.len() == (width * height * 4) as usize {
+                    if (rgba.len() == (width * height * 4) as usize) {
                         if let Ok(mut shared) = self.ivars().shared_data.lock() {
                             // println!("💾 Updated shared buffer with {}x{} frame", width, height);
                             shared.width = width;
