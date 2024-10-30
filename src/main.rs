@@ -260,7 +260,7 @@ fn setup(
             base_color: Color::linear_rgb(255.0, 200.0, 0.0),
             ..default()
         })),
-        Transform::from_xyz(-2.0, 1.0, -7.0),
+        Transform::from_xyz(-4.0, 1.0, -7.0),
     ));
 
     // Camera
