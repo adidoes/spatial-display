@@ -22,7 +22,7 @@ async-hid = "0.1.0"
 
 winit = "0.30.5"
 tray-item = "0.10.0"
-screen-capture-kit = "0.3.1"
+# screen-capture-kit = "0.3.1"
 tokio = { version = "1.41.0", features = ["full"] }
 core-graphics2 = { version = "0.4.1", default-features = false, features = [
   "display",
@@ -43,16 +43,21 @@ objc2-foundation = { version = "0.2.2", features = [
 ] }
 dispatch2 = "0.1.0"
 core-foundation = { version = "0.10.0", default-features = false }
+rand = "0.8.5"
+ar-drivers = { path = "./ar-drivers" }
+libc = "0.2.161"
+screen-capture-kit = "0.3.1"
 
 [dev-dependencies]
 clap = { version = "4.3", features = ["derive"] }
 
 [workspace]
-resolver = "2" # Important! wgpu/Bevy needs this!
+resolver = "2"                # Important! wgpu/Bevy needs this!
+members = ["ar-drivers", "."]
 
 # Enable optimization in debug mode
 [profile.dev]
-opt-level = 3
+opt-level = 1
 
 # Enable high optimizations for dependencies (incl. Bevy), but not for our code:
 [profile.dev.package."*"]

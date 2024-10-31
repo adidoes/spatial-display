@@ -36,7 +36,19 @@
 
 use nalgebra::{Isometry3, Matrix3, UnitQuaternion, Vector2, Vector3};
 
+use crate::naive_cf::NaiveCF;
+
+#[cfg(feature = "grawoow")]
+pub mod grawoow;
+#[cfg(feature = "mad_gaze")]
+pub mod mad_gaze;
+mod naive_cf;
+#[cfg(feature = "nreal")]
 pub mod nreal_air;
+#[cfg(feature = "nreal")]
+pub mod nreal_light;
+#[cfg(feature = "rokid")]
+pub mod rokid;
 mod util;
 
 /// Possible errors resulting from `ar-drivers` API calls
@@ -44,8 +56,15 @@ mod util;
 pub enum Error {
     /// A standard IO error happened. See [`std::io::Error`] for specifics
     IoError(std::io::Error),
+    /// An rusb error happened. See [`rusb::Error`] for specifics
+    #[cfg(feature = "rusb")]
+    UsbError(rusb::Error),
     /// A hidapi error happened. See [`hidapi::HidError`] for specifics
+    #[cfg(feature = "hidapi")]
     HidError(hidapi::HidError),
+    /// A serialport error happened. See [`serialport::Error`] for specifics
+    #[cfg(feature = "serialport")]
+    SerialPortError(serialport::Error),
     /// No glasses were found.
     NotFound,
     /// The feature is not available with this headset.
@@ -61,11 +80,68 @@ pub enum Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
+/*
+high level interface of glasses & state estimation, with the following built-in fusion pipeline:
+
+(the first version should only use complementary filter for simplicity and sanity test)
+
+- roll/pitch <= acc + gyro (complementary filter)
+  - assuming that acc vector always pointed up, spacecraft moving in that direction can create 1G artificial gravity
+    - TODO: this obviously assumes no steadily accelerating frame, at which point up d_acc has to be used for correction
+  - TODO: use ESKF (error-state/multiplicatory KF, https://arxiv.org/abs/1711.02508)
+- gyro-yaw <= gyro (integrate over time)
+- mag-yaw <= mag + roll/pitch (arctan)
+  - TODO: mag calibration?
+     (continuous ellipsoid fitting, assuming homogeneous E-M environment & hardpoint-mounted E-M interference)
+- yaw <= mag-yaw + gyro-gyro (complementary filter)
+  - TODO: use EKF
+
+CAUTION: unlike [[GlassesEvent]], all states & outputs should use FRD reference frame
+ (forward, right, down, corresponding to roll, pitch, yaw in Euler angles-represented rotation)
+
+FRD is the standard frame for aerospace, and is also the default frame for NALgebra
+*/
+pub trait Fusion: Send {
+    fn glasses(&mut self) -> &mut Box<dyn ARGlasses>;
+    // TODO: only declared mutable as many API of ARGlasses are also mutable
+
+    /// primary estimation output
+    /// can be used to convert to Euler angles of different conventions
+    fn attitude_quaternion(&self) -> UnitQuaternion<f32>;
+
+    /// use FRD frame as error in Quaternion is multiplicative & is over-defined
+    fn inconsistency(&self) -> f32;
+
+    fn update(&mut self) -> ();
+}
+
+impl dyn Fusion {
+    pub fn attitude_frd_rad(&self) -> Vector3<f32> {
+        let (roll, pitch, yaw) = (self.attitude_quaternion()).euler_angles();
+        Vector3::new(roll, pitch, yaw)
+    }
+
+    pub fn attitude_frd_deg(&self) -> Vector3<f32> {
+        self.attitude_frd_rad().map(|x| x.to_degrees())
+    }
+}
+
+pub fn any_fusion() -> Result<Box<dyn Fusion>> {
+    // let glasses = any_glasses()?;
+    let glasses = any_glasses()?;
+    Ok(Box::new(NaiveCF::new(glasses)?))
+}
+
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::IoError(e) => Some(e),
+            #[cfg(feature = "rusb")]
+            Error::UsbError(e) => Some(e),
+            #[cfg(feature = "hidapi")]
             Error::HidError(e) => Some(e),
+            #[cfg(feature = "serialport")]
+            Error::SerialPortError(e) => Some(e),
             _ => None,
         }
     }
@@ -75,7 +151,12 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Error::IoError(_) => "I/O error",
+            #[cfg(feature = "rusb")]
+            Error::UsbError(_) => "Libusb error",
+            #[cfg(feature = "hidapi")]
             Error::HidError(_) => "Hidapi error",
+            #[cfg(feature = "serialport")]
+            Error::SerialPortError(_) => "Serial error",
             Error::NotFound => "Glasses not found",
             Error::NotImplemented => "Not implemented for these glasses",
             Error::PacketTimeout => "Packet timeout",
@@ -217,12 +298,43 @@ pub struct DisplayMatrices {
     pub isometry: Isometry3<f64>,
 }
 
+fn upcast<G: ARGlasses + 'static>(result: Result<G>) -> Result<Box<dyn ARGlasses>> {
+    result.map(|glasses| Box::new(glasses) as Box<dyn ARGlasses>)
+}
+
 /// Convenience function to detect and connect to any of the supported glasses
+#[cfg(not(target_os = "android"))]
 pub fn any_glasses() -> Result<Box<dyn ARGlasses>> {
-    if let Ok(glasses) = nreal_air::NrealAir::new() {
-        return Ok(Box::new(glasses));
-    };
-    Err(Error::NotFound)
+    let glasses_factories: Vec<(&str, fn() -> Result<Box<dyn ARGlasses>>)> = vec![
+        #[cfg(feature = "rokid")]
+        ("RokidAir", || upcast(rokid::RokidAir::new())),
+        #[cfg(feature = "nreal")]
+        ("NrealAir", || upcast(nreal_air::NrealAir::new())),
+        #[cfg(feature = "nreal")]
+        ("NrealLight", || upcast(nreal_light::NrealLight::new())),
+        #[cfg(feature = "grawoow")]
+        ("GrawoowG530", || upcast(grawoow::GrawoowG530::new())),
+        #[cfg(feature = "mad_gaze")]
+        ("MadGazeGlow", || upcast(mad_gaze::MadGazeGlow::new())),
+    ];
+
+    glasses_factories
+        .into_iter()
+        .find_map(|(glasses_type, factory)| {
+            let factory: fn() -> Result<Box<dyn ARGlasses>> = factory;
+
+            factory()
+                .map_err(|e| {
+                    //
+                    println!("can't find {}: {}", glasses_type, e)
+                })
+                .ok()
+                .map(|v| {
+                    println!("found {}", glasses_type);
+                    v
+                })
+        })
+        .ok_or(Error::NotFound)
 }
 
 impl From<std::io::Error> for Error {
@@ -230,12 +342,27 @@ impl From<std::io::Error> for Error {
         Error::IoError(e)
     }
 }
+
+#[cfg(feature = "rusb")]
+impl From<rusb::Error> for Error {
+    fn from(e: rusb::Error) -> Self {
+        Error::UsbError(e)
+    }
+}
+
+#[cfg(feature = "hidapi")]
 impl From<hidapi::HidError> for Error {
     fn from(e: hidapi::HidError) -> Self {
         Error::HidError(e)
     }
 }
 
+#[cfg(feature = "serialport")]
+impl From<serialport::Error> for Error {
+    fn from(e: serialport::Error) -> Self {
+        Error::SerialPortError(e)
+    }
+}
 
 impl From<&'static str> for Error {
     fn from(e: &'static str) -> Self {

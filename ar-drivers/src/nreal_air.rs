@@ -12,12 +12,10 @@ use std::collections::VecDeque;
 
 use byteorder::{LittleEndian, ReadBytesExt};
 use hidapi::{HidApi, HidDevice};
-// use async_hid::{AccessMode, DeviceInfo, HidResult};
-
 use nalgebra::{Isometry3, Matrix3, Quaternion, Translation3, UnitQuaternion, Vector3};
 use tinyjson::JsonValue;
 
-use crate::ar_drivers::lib::{
+use crate::{
     util::crc32_adler, ARGlasses, DisplayMatrices, DisplayMode, Error, GlassesEvent, Result, Side,
 };
 
@@ -165,11 +163,25 @@ impl ARGlasses for NrealAir {
 impl NrealAir {
     /// Vendor ID of the NReal Air's components
     pub const VID: u16 = NREAL_VID;
+    /// Product ID of the NReal Air 1's components
+    #[deprecated]
+    pub const PID: u16 = AIR_PID;
 
     const DISPLAY_DIVERGENCE: f64 = 0.017;
 
+    /// Connect to a specific glasses, based on the
+    /// Mainly made to work around android permission issues
+    #[cfg(target_os = "android")]
+    pub fn new(fd: isize) -> Result<Self> {
+        let device = HidApi::new_without_enumerate()?.wrap_sys_device(fd, 4)?;
+        let pid = device.get_device_info()?.product_id();
+        let model = AirModel::try_from(pid)?;
+        Self::new_common(model, device, ImuDevice::new(fd)?)
+    }
+
     /// Find a connected Nreal Air device and connect to it. (And claim the USB interface)
     /// Only one instance can be alive at a time
+    #[cfg(not(target_os = "android"))]
     pub fn new() -> Result<Self> {
         let (model, device) = open_nreal_endpoint(4)?;
         Self::new_common(model, device, ImuDevice::new()?)
@@ -260,6 +272,12 @@ struct ImuDevice {
 }
 
 impl ImuDevice {
+    #[cfg(target_os = "android")]
+    pub fn new(fd: isize) -> Result<Self> {
+        Self::new_device(HidApi::new_without_enumerate()?.wrap_sys_device(fd, 3)?)
+    }
+
+    #[cfg(not(target_os = "android"))]
     pub fn new() -> Result<Self> {
         let (_, device) = open_nreal_endpoint(3)?;
         Self::new_device(device)
@@ -432,7 +450,7 @@ impl ImuDevice {
         let acc_z = reader.read_i24::<LittleEndian>()? as f32;
         let accelerometer = Vector3::new(
             // The bias fields do not correspond to the raw fields, but for some reason
-            // // this looks like the correct zero.
+            // this looks like the correct zero.
             (acc_x * acc_mul / acc_div) * 9.81 + self.accelerometer_bias.x,
             (acc_y * acc_mul / acc_div) * 9.81 + self.accelerometer_bias.z,
             (acc_z * acc_mul / acc_div) * 9.81 + self.accelerometer_bias.y,
@@ -550,6 +568,7 @@ impl ImuPacket {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn open_nreal_endpoint(interface: i32) -> Result<(AirModel, HidDevice)> {
     let hidapi = HidApi::new()?;
     for device in hidapi.device_list() {
