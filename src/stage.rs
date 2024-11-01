@@ -3,7 +3,10 @@ use bevy::{
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
 };
+use core_graphics2::display::CGDisplay;
 use rand::Rng;
+
+use crate::screen_capture::ScreenSize;
 
 #[derive(Resource)]
 pub struct AssetHandles {
@@ -88,14 +91,19 @@ fn spawn_screen(
     info!("Spawning screen");
     // Create initial texture with RGBA format
     let mut rng = rand::thread_rng();
+
+    let display = CGDisplay::main();
+    let width = display.pixels_wide() as u32;
+    let height = display.pixels_high() as u32;
+
     let mut screen_texture = Image::new(
         Extent3d {
-            width: 1800 * 2,
-            height: 1169 * 2,
+            width,
+            height,
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        (0..3600 * 1169 * 2 * 4)
+        (0..(width * height * 4))
             .map(|i| {
                 if i % 4 == 3 {
                     255
@@ -138,10 +146,13 @@ fn spawn_screen(
 
     // screen plane
     // Scale the plane to match the texture dimensions while maintaining aspect ratio
-    let width = 2.0; // Scale down by 100 for reasonable size in 3D space
-    let height = width * (1169.0 / 1800.0); // Maintain aspect ratio
+    let plane_width = 2.0; // Adjust as needed
+    let plane_height = plane_width * (height as f32 / width as f32);
     commands.spawn((
-        Mesh3d(meshes.add(Mesh::from(Plane3d::new(Vec3::Z, Vec2::new(width, height))))),
+        Mesh3d(meshes.add(Mesh::from(Plane3d::new(
+            Vec3::Z,
+            Vec2::new(plane_width, plane_height),
+        )))),
         MeshMaterial3d(screen_material),
         Transform::from_xyz(0.0, 0.0, -6.0),
     ));

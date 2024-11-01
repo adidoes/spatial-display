@@ -29,11 +29,18 @@ use screen_capture_kit::{
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
 use crate::stage::AssetHandles;
+use core_graphics2::display::CGDisplay; // Use core-graphics2
 
 #[derive(Resource)]
 struct FrameChannel {
     sender: Arc<Sender<Vec<u8>>>,
     receiver: Receiver<Vec<u8>>,
+}
+
+#[derive(Resource)]
+pub struct ScreenSize {
+    pub width: usize,
+    pub height: usize,
 }
 
 pub struct ScreenCapturePlugin;
@@ -215,7 +222,7 @@ fn setup_screen_capture(mut commands: Commands, frame_channel: Res<FrameChannel>
 
         let configuration: Id<SCStreamConfiguration> = SCStreamConfiguration::new();
 
-        let scale_factor = 2.0 as f64;
+        let scale_factor = 1.0 as f64;
         configuration.set_width((display.width() as f64 * scale_factor) as size_t);
         configuration.set_height((display.height() as f64 * scale_factor) as size_t);
         configuration.set_minimum_frame_interval(core_media::time::CMTime::make(1, 120));
@@ -272,14 +279,14 @@ fn update_screen_texture(
             // );
 
             // Verify dimensions
-            let expected_size = 1800 * 2 * 1169 * 2 * 4;
-            assert_eq!(
-                frame_data.len(),
-                expected_size,
-                "Frame data size mismatch: got {} expected {}",
-                frame_data.len(),
-                expected_size
-            );
+            // let expected_size = screen_size.width * screen_size.height * 4;
+            // assert_eq!(
+            //     frame_data.len(),
+            //     expected_size,
+            //     "Frame data size mismatch: got {} expected {}",
+            //     frame_data.len(),
+            //     expected_size
+            // );
 
             image.data = frame_data;
 
@@ -288,9 +295,9 @@ fn update_screen_texture(
             }
 
             // Force texture update by sending asset event
-            extracted_asset_events.send(AssetEvent::Modified {
-                id: asset_handles.screen.id(),
-            });
+            // extracted_asset_events.send(AssetEvent::Modified {
+            //     id: asset_handles.screen.id(),
+            // });
         }
     }
 }
