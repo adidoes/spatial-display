@@ -1,5 +1,8 @@
+use std::ops::DerefMut;
+use std::sync::Arc;
+
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use core_foundation::base::TCFType;
 use core_media::sample_buffer::{CMSampleBuffer, CMSampleBufferRef};
 use core_video::pixel_buffer::{
@@ -23,30 +26,24 @@ use screen_capture_kit::{
         SCStreamOutputType,
     },
 };
-use std::sync::{
-    mpsc::{channel, Receiver, Sender},
-    Arc, Mutex,
-};
+use tokio::sync::mpsc::{self, Receiver, Sender};
 
-#[derive(Resource)]
-pub struct ScreenTextureHandle {
-    pub handle: Handle<Image>,
-}
+use crate::stage::AssetHandles;
 
 #[derive(Resource)]
 struct FrameChannel {
-    sender: Sender<Vec<u8>>,
-    receiver: Mutex<Receiver<Vec<u8>>>,
+    sender: Arc<Sender<Vec<u8>>>,
+    receiver: Receiver<Vec<u8>>,
 }
 
 pub struct ScreenCapturePlugin;
 
 impl Plugin for ScreenCapturePlugin {
     fn build(&self, app: &mut App) {
-        let (tx, rx) = channel();
+        let (tx, rx) = mpsc::channel::<Vec<u8>>(32);
         app.insert_resource(FrameChannel {
-            sender: tx,
-            receiver: Mutex::new(rx),
+            sender: Arc::new(tx),
+            receiver: rx,
         })
         .add_systems(Startup, setup_screen_capture)
         .add_systems(Update, update_screen_texture);
@@ -54,7 +51,7 @@ impl Plugin for ScreenCapturePlugin {
 }
 
 pub struct DelegateIvars {
-    frame_sender: Sender<Vec<u8>>,
+    frame_sender: Arc<Sender<Vec<u8>>>,
 }
 
 declare_class!(
@@ -118,8 +115,8 @@ declare_class!(
 
                     pixel_buffer.unlock_base_address(kCVPixelBufferLock_ReadOnly);
 
-                    if let Err(e) = self.ivars().frame_sender.send(rgba) {
-                        error!("Failed to send frame data: {:?}", e);
+                    if let Err(e) = self.ivars().frame_sender.try_send(rgba) {
+                        error!("Failed to send frame data: {}", e);
                     }
 
                     // println!("base address: {:?}", base_address);
@@ -174,7 +171,7 @@ declare_class!(
 );
 
 impl Delegate {
-    pub fn new(frame_sender: Sender<Vec<u8>>) -> Id<Self> {
+    pub fn new(frame_sender: Arc<Sender<Vec<u8>>>) -> Id<Self> {
         let this: Allocated<Self> = Self::alloc();
         unsafe {
             let this = this.set_ivars(DelegateIvars { frame_sender });
@@ -183,73 +180,116 @@ impl Delegate {
     }
 }
 
-fn setup_screen_capture(
-    mut commands: Commands,
-    mut images: ResMut<Assets<Image>>,
-    frame_channel: Res<FrameChannel>,
-) {
-    let (tx, rx) = channel();
-    SCShareableContent::get_shareable_content_with_completion_closure(
-        move |shareable_content, error| {
-            let ret = shareable_content.ok_or_else(|| error.unwrap());
-            tx.send(ret).unwrap();
-        },
-    );
-    let shareable_content = rx.recv().unwrap();
-    if let Err(error) = shareable_content {
-        println!("error: {:?}", error);
-        return;
-    }
-    let shareable_content = shareable_content.unwrap();
-    let displays = shareable_content.displays();
-    let display = match displays.first() {
-        Some(display) => display,
-        None => {
-            println!("no display found");
+fn setup_screen_capture(mut commands: Commands, frame_channel: Res<FrameChannel>) {
+    let sender = frame_channel.sender.clone();
+
+    std::thread::spawn(move || {
+        let (sc_tx, mut sc_rx) = mpsc::channel(1);
+        SCShareableContent::get_shareable_content_with_completion_closure(
+            move |shareable_content, error| {
+                let ret = shareable_content.ok_or_else(|| error.unwrap());
+                sc_tx.blocking_send(ret).unwrap();
+            },
+        );
+        let shareable_content = sc_rx.blocking_recv().unwrap();
+        if let Err(error) = shareable_content {
+            println!("error: {:?}", error);
             return;
         }
-    };
-    let filter = SCContentFilter::init_with_display_exclude_windows(
-        SCContentFilter::alloc(),
-        display,
-        &NSArray::new(),
-    );
-    let configuration: Id<SCStreamConfiguration> = SCStreamConfiguration::new();
-    configuration.set_width(display.width() as size_t);
-    configuration.set_height(display.height() as size_t);
-    configuration.set_pixel_format(kCVPixelFormatType_32BGRA);
-    let delegate = Delegate::new(frame_channel.sender.clone());
-    let stream_error = ProtocolObject::from_ref(&*delegate);
-    let stream =
-        SCStream::init_with_filter(SCStream::alloc(), &filter, &configuration, stream_error);
-    let queue = Queue::new("com.spatial_display.queue", QueueAttribute::Serial);
-    let output = ProtocolObject::from_ref(&*delegate);
-    if let Err(ret) = stream.add_stream_output(output, SCStreamOutputType::Screen, &queue) {
-        println!("error: {:?}", ret);
-        return;
-    }
-    stream.start_capture(move |result| {
-        if let Some(error) = result {
-            println!("error: {:?}", error);
+        let shareable_content = shareable_content.unwrap();
+
+        let displays = shareable_content.displays();
+        let display = match displays.first() {
+            Some(display) => display,
+            None => {
+                println!("no display found");
+                return;
+            }
+        };
+
+        let filter = SCContentFilter::init_with_display_exclude_windows(
+            SCContentFilter::alloc(),
+            display,
+            &NSArray::new(),
+        );
+
+        let configuration: Id<SCStreamConfiguration> = SCStreamConfiguration::new();
+
+        let scale_factor = 2.0 as f64;
+        configuration.set_width((display.width() as f64 * scale_factor) as size_t);
+        configuration.set_height((display.height() as f64 * scale_factor) as size_t);
+        // it's better to do the conversion after capturing rather than asking macOS to do it during capture.
+        // the internal representation of pixels on macOS uses BGRA order
+        configuration.set_pixel_format(kCVPixelFormatType_32BGRA);
+
+        let delegate = Delegate::new(sender);
+        let stream_error = ProtocolObject::from_ref(&*delegate);
+        let stream =
+            SCStream::init_with_filter(SCStream::alloc(), &filter, &configuration, stream_error);
+        let queue = Queue::new("com.spatial_display.queue", QueueAttribute::Serial);
+        let output = ProtocolObject::from_ref(&*delegate);
+        if let Err(ret) = stream.add_stream_output(output, SCStreamOutputType::Screen, &queue) {
+            println!("error: {:?}", ret);
+            return;
         }
-    });
-    std::thread::sleep(std::time::Duration::from_secs(10));
-    stream.stop_capture(move |result| {
-        if let Some(error) = result {
-            println!("error: {:?}", error);
+        println!("STARTING CAP");
+        stream.start_capture(move |result| {
+            println!("start_capture");
+            if let Some(error) = result {
+                println!("error: {:?}", error);
+            }
+        });
+        // std::thread::sleep(std::time::Duration::from_secs(10));
+        // stream.stop_capture(move |result| {
+        //     if let Some(error) = result {
+        //         println!("error: {:?}", error);
+        //     }
+        // });
+        println!("🔄 Entering capture loop");
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
         }
     });
 }
 
 fn update_screen_texture(
-    frame_channel: Res<FrameChannel>,
-    screen_texture: Res<ScreenTextureHandle>,
+    mut frame_channel: ResMut<FrameChannel>,
     mut images: ResMut<Assets<Image>>,
+    asset_handles: Res<AssetHandles>,
+    mut extracted_asset_events: EventWriter<AssetEvent<Image>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    if let Ok(frame_data) = frame_channel.receiver.lock().unwrap().try_recv() {
-        if let Some(image) = images.get_mut(&screen_texture.handle) {
-            // Convert frame data to RGBA if needed
+    if let Ok(frame_data) = frame_channel.receiver.try_recv() {
+        // info!("Got frame: {}x{} = {} bytes", 1800, 1169, frame_data.len());
+
+        if let Some(image) = images.get_mut(&asset_handles.screen) {
+            // info!(
+            //     "Current texture: {}x{} = {} bytes",
+            //     image.texture_descriptor.size.width,
+            //     image.texture_descriptor.size.height,
+            //     image.data.len()
+            // );
+
+            // Verify dimensions
+            let expected_size = 1800 * 2 * 1169 * 2 * 4;
+            assert_eq!(
+                frame_data.len(),
+                expected_size,
+                "Frame data size mismatch: got {} expected {}",
+                frame_data.len(),
+                expected_size
+            );
+
             image.data = frame_data;
+
+            for (_, mut material) in materials.iter_mut() {
+                material.deref_mut();
+            }
+
+            // Force texture update by sending asset event
+            extracted_asset_events.send(AssetEvent::Modified {
+                id: asset_handles.screen.id(),
+            });
         }
     }
 }

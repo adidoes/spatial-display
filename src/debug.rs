@@ -1,10 +1,14 @@
 use bevy::prelude::*;
 
+use crate::stage::AssetHandles;
+
 pub struct DebugPlugin;
 
 impl Plugin for DebugPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, print_position);
+        app
+            // .add_systems(Update, print_position)
+            .add_systems(Update, check_asset_handles);
     }
 }
 
@@ -16,4 +20,11 @@ fn print_position(query: Query<(Entity, &Transform)>) {
             entity, transform.translation
         );
     }
+}
+
+fn check_asset_handles(asset_server: Res<AssetServer>, asset_handles: Res<AssetHandles>) {
+    info!(
+        "AssetStates: screen {:?}",
+        asset_server.get_load_state(asset_handles.screen.id()),
+    )
 }

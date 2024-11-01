@@ -11,7 +11,7 @@ use bevy::{
 
 use camera::CameraPlugin;
 use debug::DebugPlugin;
-use hmd::HMDPlugin;
+use hmd::HmdPlugin;
 use screen_capture::ScreenCapturePlugin;
 use stage::StagePlugin;
 
@@ -29,19 +29,20 @@ fn main() {
                 // the framespace_settings lines in setup()
                 resizable: true,
                 focused: false,
-                // visible: false,
+                visible: false,
                 window_level: WindowLevel::AlwaysOnTop,
-                // mode: WindowMode::Fullscreen(MonitorSelection::Index(1)),
-                // position: WindowPosition::Centered(MonitorSelection::Index(1)), // 0 is primary, 1 is secondary
-                mode: WindowMode::Windowed,
+                mode: WindowMode::Fullscreen(MonitorSelection::Index(1)),
+                position: WindowPosition::Centered(MonitorSelection::Index(1)), // 0 is primary, 1 is secondary
+                // mode: WindowMode::Windowed,
                 ..default()
             }),
             ..default()
         }))
         .add_plugins(CameraPlugin)
         .add_plugins(StagePlugin)
-        .add_plugins(HMDPlugin)
+        .add_plugins(HmdPlugin)
         .add_plugins(ScreenCapturePlugin)
+        // .insert_resource(Time::<Fixed>::from_hz(500.0)) // when using Fixed schedule
         // .add_plugins(DebugPlugin)
         .run();
 }

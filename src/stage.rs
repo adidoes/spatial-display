@@ -1,9 +1,14 @@
-use crate::screen_capture::ScreenTextureHandle;
 use bevy::{
     asset::RenderAssetUsages,
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
 };
+use rand::Rng;
+
+#[derive(Resource)]
+pub struct AssetHandles {
+    pub screen: Handle<Image>,
+}
 
 pub struct StagePlugin;
 
@@ -16,8 +21,11 @@ impl Plugin for StagePlugin {
 fn spawn_stage(
     mut commands: Commands,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
+    info!("Spawning stage");
+
     // Ground plane
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::default().mesh().size(30.0, 30.0))),
@@ -28,14 +36,46 @@ fn spawn_stage(
         Transform::from_xyz(0.0, -4.0, 0.0),
     ));
 
+    let sphere_texture = Image::new(
+        Extent3d {
+            width: 256,
+            height: 256,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        (0..256 * 256)
+            .flat_map(|i| {
+                let y = (i / 256) as f32 / 256.0;
+                let r = 255;
+                let g = ((1.0 - y) * 255.0) as u8;
+                let b = 0;
+                vec![r, g, b, 255]
+            })
+            .collect(),
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+
+    // info!(
+    //     "All image handles BEFORE SPHERE INSERT: {:?}",
+    //     images.ids().collect::<Vec<_>>()
+    // );
+    let sphere_texture_handle = images.add(sphere_texture);
+    // info!("SPHERE texture handle: {:?}", sphere_texture_handle);
+    // info!(
+    //     "All image handles AFTER SPHERE INSERT: {:?}",
+    //     images.ids().collect::<Vec<_>>()
+    // );
+    let sphere_material = materials.add(StandardMaterial {
+        base_color_texture: Some(sphere_texture_handle),
+        ..default()
+    });
+
     // Test spheres in different positions
     commands.spawn((
         Mesh3d(meshes.add(Sphere::default().mesh())),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(1.0, 0.0, 0.0),
-            ..default()
-        })),
-        Transform::from_xyz(0.0, 1.0, 1.0),
+        MeshMaterial3d(sphere_material),
+        Transform::from_xyz(0.0, 1.0, -8.0),
     ));
 }
 
@@ -45,25 +85,47 @@ fn spawn_screen(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
+    info!("Spawning screen");
     // Create initial texture with RGBA format
+    let mut rng = rand::thread_rng();
     let mut screen_texture = Image::new(
         Extent3d {
-            width: 1800,
-            height: 1169,
+            width: 1800 * 2,
+            height: 1169 * 2,
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        vec![0; 1800 * 1169 * 4],
+        (0..3600 * 1169 * 2 * 4)
+            .map(|i| {
+                if i % 4 == 3 {
+                    255
+                } else {
+                    rng.gen_range(0..=255)
+                }
+            })
+            .collect(),
         TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
+        RenderAssetUsages::default(),
     );
 
     screen_texture.texture_descriptor.usage =
-        TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING;
+        TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING;
 
+    // info!(
+    //     "All image handles BEFORE SCREEN INSERT: {:?}",
+    //     images.ids().collect::<Vec<_>>()
+    // );
     let texture_handle = images.add(screen_texture);
-    commands.insert_resource(ScreenTextureHandle {
-        handle: texture_handle.clone(),
+    // let strong_handle = images.get_strong_handle(texture_handle.id()).unwrap();
+    // info!("SCREEN texture handle: {:?}", texture_handle);
+    // info!("STRONG texture handle: {:?}", strong_handle);
+    // info!("texture_handle.is_strong: {:?}", texture_handle.is_strong());
+    // info!(
+    //     "All image handles AFTER SCREEN INSERT: {:?}",
+    //     images.ids().collect::<Vec<_>>()
+    // );
+    commands.insert_resource(AssetHandles {
+        screen: texture_handle.clone(),
     });
 
     // Create material with the screen texture
@@ -75,11 +137,12 @@ fn spawn_screen(
     });
 
     // screen plane
+    // Scale the plane to match the texture dimensions while maintaining aspect ratio
+    let width = 3.0; // Scale down by 100 for reasonable size in 3D space
+    let height = width * (1169.0 / 1800.0); // Maintain aspect ratio
     commands.spawn((
-        Mesh3d(meshes.add(Mesh::from(Plane3d::new(Vec3::Z, Vec2::splat(5.0))))),
+        Mesh3d(meshes.add(Mesh::from(Plane3d::new(Vec3::Z, Vec2::new(width, height))))),
         MeshMaterial3d(screen_material),
-        Transform::from_xyz(0.0, 0.0, -10.0),
-        // Transform::from_xyz(0.0, 0.0, -10.0)
-        //     .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)), // Rotate 90 degrees around X axis
+        Transform::from_xyz(0.0, 0.0, -6.0),
     ));
 }

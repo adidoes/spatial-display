@@ -6,15 +6,15 @@ use bevy::prelude::*;
 use dcmimu::DCMIMU;
 
 #[derive(Resource)]
-struct IMUStore {
+struct ImuStore {
     dcmimu: Arc<Mutex<DCMIMU>>,
 }
 
-pub struct HMDPlugin;
+pub struct HmdPlugin;
 
-impl Plugin for HMDPlugin {
+impl Plugin for HmdPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(IMUStore {
+        app.insert_resource(ImuStore {
             dcmimu: Arc::new(Mutex::new(DCMIMU::new())),
         })
         .add_systems(Startup, hmd_motion_tracking)
@@ -35,7 +35,7 @@ impl Plugin for HMDPlugin {
 /// 4. Calculates time delta between measurements for accurate integration
 ///
 /// The motion data is used to update camera orientation in the main rendering thread.
-fn hmd_motion_tracking(imu_store: Res<IMUStore>) {
+fn hmd_motion_tracking(imu_store: Res<ImuStore>) {
     let shared_dcmimu_clone = Arc::clone(&imu_store.dcmimu);
 
     std::thread::spawn(move || {
@@ -90,7 +90,7 @@ fn hmd_motion_tracking(imu_store: Res<IMUStore>) {
 /// and applies it to all camera entities in the scene.
 ///
 /// The rotation order is YXZ (yaw, roll inverted, pitch) to match the IMU coordinate system.
-fn update_camera_orientation(mut query: Query<&mut Transform, With<Camera>>, state: Res<IMUStore>) {
+fn update_camera_orientation(mut query: Query<&mut Transform, With<Camera>>, state: Res<ImuStore>) {
     let dcm = state.dcmimu.lock().unwrap().all();
 
     // println!("DCM: {:?}", dcm);
