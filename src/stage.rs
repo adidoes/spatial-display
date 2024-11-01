@@ -138,7 +138,7 @@ fn spawn_screen(
 
     // screen plane
     // Scale the plane to match the texture dimensions while maintaining aspect ratio
-    let width = 3.0; // Scale down by 100 for reasonable size in 3D space
+    let width = 2.0; // Scale down by 100 for reasonable size in 3D space
     let height = width * (1169.0 / 1800.0); // Maintain aspect ratio
     commands.spawn((
         Mesh3d(meshes.add(Mesh::from(Plane3d::new(Vec3::Z, Vec2::new(width, height))))),

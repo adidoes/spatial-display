@@ -218,6 +218,7 @@ fn setup_screen_capture(mut commands: Commands, frame_channel: Res<FrameChannel>
         let scale_factor = 2.0 as f64;
         configuration.set_width((display.width() as f64 * scale_factor) as size_t);
         configuration.set_height((display.height() as f64 * scale_factor) as size_t);
+        configuration.set_minimum_frame_interval(core_media::time::CMTime::make(1, 120));
         // it's better to do the conversion after capturing rather than asking macOS to do it during capture.
         // the internal representation of pixels on macOS uses BGRA order
         configuration.set_pixel_format(kCVPixelFormatType_32BGRA);
