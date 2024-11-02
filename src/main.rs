@@ -26,7 +26,7 @@ fn main() {
             color: Color::default(),
             brightness: 100.0,
         })
-        .insert_resource(ScaleFactor { value: 2.0 })
+        .insert_resource(ScaleFactor { value: 1.6 })
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 // https://docs.rs/bevy_window/latest/bevy_window/enum.PresentMode.html
@@ -49,6 +49,6 @@ fn main() {
         .add_plugins(HmdPlugin)
         .add_plugins(ScreenCapturePlugin)
         .insert_resource(Time::<Fixed>::from_hz(500.0)) // when using Fixed schedule
-        // .add_plugins(DebugPlugin)
+        .add_plugins(DebugPlugin)
         .run();
 }

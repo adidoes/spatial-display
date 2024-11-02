@@ -94,8 +94,8 @@ fn spawn_screen(
     let mut rng = rand::thread_rng();
 
     let display = CGDisplay::main();
-    let width = display.pixels_wide() as u32 * scale_factor.value as u32;
-    let height = display.pixels_high() as u32 * scale_factor.value as u32;
+    let width = (display.pixels_wide() as f64 * scale_factor.value as f64).round() as u32;
+    let height = (display.pixels_high() as f64 * scale_factor.value as f64).round() as u32;
 
     let mut screen_texture = Image::new(
         Extent3d {

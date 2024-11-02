@@ -17,7 +17,7 @@ impl Plugin for HmdPlugin {
         app.insert_resource(ImuStore {
             dcmimu: Arc::new(Mutex::new(DCMIMU::new())),
         })
-        .add_systems(Startup, hmd_motion_tracking)
+        .add_systems(Startup, start_tracking)
         .add_systems(FixedPreUpdate, update_camera_orientation);
     }
 }
@@ -35,7 +35,7 @@ impl Plugin for HmdPlugin {
 /// 4. Calculates time delta between measurements for accurate integration
 ///
 /// The motion data is used to update camera orientation in the main rendering thread.
-fn hmd_motion_tracking(imu_store: Res<ImuStore>) {
+fn start_tracking(imu_store: Res<ImuStore>) {
     let shared_dcmimu_clone = Arc::clone(&imu_store.dcmimu);
 
     std::thread::spawn(move || {

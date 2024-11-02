@@ -1,4 +1,7 @@
-use bevy::prelude::*;
+use bevy::{
+    diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
+    prelude::*,
+};
 
 use crate::stage::AssetHandles;
 
@@ -8,7 +11,8 @@ impl Plugin for DebugPlugin {
     fn build(&self, app: &mut App) {
         app
             // .add_systems(Update, print_position)
-            .add_systems(Update, check_asset_handles);
+            // .add_systems(Update, check_asset_handles)
+            .add_plugins((FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin::default()));
     }
 }
 
