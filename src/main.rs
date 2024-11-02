@@ -15,12 +15,18 @@ use hmd::HmdPlugin;
 use screen_capture::ScreenCapturePlugin;
 use stage::StagePlugin;
 
+#[derive(Resource)]
+pub struct ScaleFactor {
+    pub value: f64,
+}
+
 fn main() {
     App::new()
         .insert_resource(AmbientLight {
             color: Color::default(),
             brightness: 100.0,
         })
+        .insert_resource(ScaleFactor { value: 2.0 })
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 // https://docs.rs/bevy_window/latest/bevy_window/enum.PresentMode.html
@@ -30,9 +36,9 @@ fn main() {
                 resizable: true,
                 focused: false,
                 visible: false,
-                window_level: WindowLevel::AlwaysOnTop,
+                // window_level: WindowLevel::AlwaysOnTop,
                 mode: WindowMode::Fullscreen(MonitorSelection::Index(1)),
-                position: WindowPosition::Centered(MonitorSelection::Index(1)), // 0 is primary, 1 is secondary
+                // position: WindowPosition::Centered(MonitorSelection::Index(1)), // 0 is primary, 1 is secondary
                 // mode: WindowMode::Windowed,
                 ..default()
             }),
@@ -42,7 +48,7 @@ fn main() {
         .add_plugins(StagePlugin)
         .add_plugins(HmdPlugin)
         .add_plugins(ScreenCapturePlugin)
-        // .insert_resource(Time::<Fixed>::from_hz(500.0)) // when using Fixed schedule
+        .insert_resource(Time::<Fixed>::from_hz(500.0)) // when using Fixed schedule
         // .add_plugins(DebugPlugin)
         .run();
 }

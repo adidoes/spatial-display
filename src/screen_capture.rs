@@ -29,6 +29,7 @@ use screen_capture_kit::{
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
 use crate::stage::AssetHandles;
+use crate::ScaleFactor;
 use core_graphics2::display::CGDisplay; // Use core-graphics2
 
 #[derive(Resource)]
@@ -37,17 +38,11 @@ struct FrameChannel {
     receiver: Receiver<Vec<u8>>,
 }
 
-#[derive(Resource)]
-pub struct ScreenSize {
-    pub width: usize,
-    pub height: usize,
-}
-
 pub struct ScreenCapturePlugin;
 
 impl Plugin for ScreenCapturePlugin {
     fn build(&self, app: &mut App) {
-        let (tx, rx) = mpsc::channel::<Vec<u8>>(32);
+        let (tx, rx) = mpsc::channel::<Vec<u8>>(60);
         app.insert_resource(FrameChannel {
             sender: Arc::new(tx),
             receiver: rx,
@@ -187,8 +182,13 @@ impl Delegate {
     }
 }
 
-fn setup_screen_capture(mut commands: Commands, frame_channel: Res<FrameChannel>) {
+fn setup_screen_capture(
+    mut commands: Commands,
+    frame_channel: Res<FrameChannel>,
+    scale_factor: Res<ScaleFactor>,
+) {
     let sender = frame_channel.sender.clone();
+    let scale_factor_value = scale_factor.value.clone();
 
     std::thread::spawn(move || {
         let (sc_tx, mut sc_rx) = mpsc::channel(1);
@@ -222,10 +222,9 @@ fn setup_screen_capture(mut commands: Commands, frame_channel: Res<FrameChannel>
 
         let configuration: Id<SCStreamConfiguration> = SCStreamConfiguration::new();
 
-        let scale_factor = 1.0 as f64;
-        configuration.set_width((display.width() as f64 * scale_factor) as size_t);
-        configuration.set_height((display.height() as f64 * scale_factor) as size_t);
-        configuration.set_minimum_frame_interval(core_media::time::CMTime::make(1, 120));
+        configuration.set_width((display.width() as f64 * scale_factor_value) as size_t);
+        configuration.set_height((display.height() as f64 * scale_factor_value) as size_t);
+        configuration.set_minimum_frame_interval(core_media::time::CMTime::make(1, 60));
         // it's better to do the conversion after capturing rather than asking macOS to do it during capture.
         // the internal representation of pixels on macOS uses BGRA order
         configuration.set_pixel_format(kCVPixelFormatType_32BGRA);
@@ -240,11 +239,15 @@ fn setup_screen_capture(mut commands: Commands, frame_channel: Res<FrameChannel>
             println!("error: {:?}", ret);
             return;
         }
-        println!("STARTING CAP");
+
+        info!("Waiting 5 seconds before starting capture...");
+        std::thread::sleep(std::time::Duration::from_secs(5));
+
+        info!("STARTING CAP");
         stream.start_capture(move |result| {
-            println!("start_capture");
+            info!("start_capture");
             if let Some(error) = result {
-                println!("error: {:?}", error);
+                warn!("error: {:?}", error);
             }
         });
         // std::thread::sleep(std::time::Duration::from_secs(10));
@@ -253,7 +256,7 @@ fn setup_screen_capture(mut commands: Commands, frame_channel: Res<FrameChannel>
         //         println!("error: {:?}", error);
         //     }
         // });
-        println!("🔄 Entering capture loop");
+        info!("🔄 Entering capture loop");
         loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
@@ -291,7 +294,7 @@ fn update_screen_texture(
             image.data = frame_data;
 
             for (_, mut material) in materials.iter_mut() {
-                material.deref_mut();
+                // material.deref_mut();
             }
 
             // Force texture update by sending asset event

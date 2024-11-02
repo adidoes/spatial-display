@@ -6,7 +6,7 @@ use bevy::{
 use core_graphics2::display::CGDisplay;
 use rand::Rng;
 
-use crate::screen_capture::ScreenSize;
+use crate::ScaleFactor;
 
 #[derive(Resource)]
 pub struct AssetHandles {
@@ -39,47 +39,47 @@ fn spawn_stage(
         Transform::from_xyz(0.0, -4.0, 0.0),
     ));
 
-    let sphere_texture = Image::new(
-        Extent3d {
-            width: 256,
-            height: 256,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        (0..256 * 256)
-            .flat_map(|i| {
-                let y = (i / 256) as f32 / 256.0;
-                let r = 255;
-                let g = ((1.0 - y) * 255.0) as u8;
-                let b = 0;
-                vec![r, g, b, 255]
-            })
-            .collect(),
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-
-    // info!(
-    //     "All image handles BEFORE SPHERE INSERT: {:?}",
-    //     images.ids().collect::<Vec<_>>()
+    // let sphere_texture = Image::new(
+    //     Extent3d {
+    //         width: 256,
+    //         height: 256,
+    //         depth_or_array_layers: 1,
+    //     },
+    //     TextureDimension::D2,
+    //     (0..256 * 256)
+    //         .flat_map(|i| {
+    //             let y = (i / 256) as f32 / 256.0;
+    //             let r = 255;
+    //             let g = ((1.0 - y) * 255.0) as u8;
+    //             let b = 0;
+    //             vec![r, g, b, 255]
+    //         })
+    //         .collect(),
+    //     TextureFormat::Rgba8UnormSrgb,
+    //     RenderAssetUsages::RENDER_WORLD,
     // );
-    let sphere_texture_handle = images.add(sphere_texture);
-    // info!("SPHERE texture handle: {:?}", sphere_texture_handle);
-    // info!(
-    //     "All image handles AFTER SPHERE INSERT: {:?}",
-    //     images.ids().collect::<Vec<_>>()
-    // );
-    let sphere_material = materials.add(StandardMaterial {
-        base_color_texture: Some(sphere_texture_handle),
-        ..default()
-    });
 
-    // Test spheres in different positions
-    commands.spawn((
-        Mesh3d(meshes.add(Sphere::default().mesh())),
-        MeshMaterial3d(sphere_material),
-        Transform::from_xyz(0.0, 1.0, -8.0),
-    ));
+    // // info!(
+    // //     "All image handles BEFORE SPHERE INSERT: {:?}",
+    // //     images.ids().collect::<Vec<_>>()
+    // // );
+    // let sphere_texture_handle = images.add(sphere_texture);
+    // // info!("SPHERE texture handle: {:?}", sphere_texture_handle);
+    // // info!(
+    // //     "All image handles AFTER SPHERE INSERT: {:?}",
+    // //     images.ids().collect::<Vec<_>>()
+    // // );
+    // let sphere_material = materials.add(StandardMaterial {
+    //     base_color_texture: Some(sphere_texture_handle),
+    //     ..default()
+    // });
+
+    // // Test spheres in different positions
+    // commands.spawn((
+    //     Mesh3d(meshes.add(Sphere::default().mesh())),
+    //     MeshMaterial3d(sphere_material),
+    //     Transform::from_xyz(0.0, 1.0, -8.0),
+    // ));
 }
 
 fn spawn_screen(
@@ -87,14 +87,15 @@ fn spawn_screen(
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
+    scale_factor: Res<ScaleFactor>,
 ) {
     info!("Spawning screen");
     // Create initial texture with RGBA format
     let mut rng = rand::thread_rng();
 
     let display = CGDisplay::main();
-    let width = display.pixels_wide() as u32;
-    let height = display.pixels_high() as u32;
+    let width = display.pixels_wide() as u32 * scale_factor.value as u32;
+    let height = display.pixels_high() as u32 * scale_factor.value as u32;
 
     let mut screen_texture = Image::new(
         Extent3d {
@@ -146,7 +147,7 @@ fn spawn_screen(
 
     // screen plane
     // Scale the plane to match the texture dimensions while maintaining aspect ratio
-    let plane_width = 2.0; // Adjust as needed
+    let plane_width = 2.5; // Adjust as needed
     let plane_height = plane_width * (height as f32 / width as f32);
     commands.spawn((
         Mesh3d(meshes.add(Mesh::from(Plane3d::new(
