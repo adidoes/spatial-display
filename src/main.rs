@@ -26,7 +26,7 @@ fn main() {
             color: Color::default(),
             brightness: 100.0,
         })
-        .insert_resource(ScaleFactor { value: 1.6 })
+        .insert_resource(ScaleFactor { value: 1.0 })
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 // https://docs.rs/bevy_window/latest/bevy_window/enum.PresentMode.html
